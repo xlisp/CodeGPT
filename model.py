@@ -222,6 +222,9 @@ class CodeGPT(nn.Module):
                     no_decay.add(fpn)
 
         param_dict = {pn: p for pn, p in self.named_parameters()}
+        # remove tied weights that won't appear in param_dict (e.g. lm_head.weight tied to wte.weight)
+        decay = decay & param_dict.keys()
+        no_decay = no_decay & param_dict.keys()
         inter_params = decay & no_decay
         union_params = decay | no_decay
         assert len(inter_params) == 0, "parameters %s in both decay/no_decay sets" % (str(inter_params),)

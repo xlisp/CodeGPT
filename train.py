@@ -151,9 +151,8 @@ def get_batch(split):
                 tokens_transformed = tokens_transformed + [SPECIAL_TOKENS["<|fim_pad|>"]] * (block_size - len(tokens_transformed))
             x_fim.append(torch.tensor(tokens_transformed[:-1], dtype=torch.long))
 
-            # target: shifted by 1, with padding tokens masked
-            target = tokens_transformed[1:] + [SPECIAL_TOKENS["<|fim_pad|>"]]
-            target = target[:block_size]
+            # target: shifted by 1 (same length as x), with padding tokens masked
+            target = tokens_transformed[1:]
             target_tensor = torch.tensor(target, dtype=torch.long)
             # mask padding tokens in loss
             target_tensor[target_tensor == SPECIAL_TOKENS["<|fim_pad|>"]] = -1

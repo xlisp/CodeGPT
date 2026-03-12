@@ -1,6 +1,6 @@
 # CodeGPT full training config
 # GPT-2 124M scale model trained on code
-# Designed for 4-8 GPUs (A100 40GB)
+# Adapted for single GPU (GTX 1080 8GB)
 
 # I/O
 out_dir = 'out-codegpt'
@@ -10,8 +10,8 @@ eval_iters = 200
 
 # data
 dataset = 'python_code'
-batch_size = 12
-block_size = 1024
+batch_size = 4
+block_size = 512
 gradient_accumulation_steps = 40
 
 # model (GPT-2 124M scale)
@@ -41,4 +41,4 @@ lr_decay_iters = 200000
 min_lr = 6e-5
 
 # system
-compile = True
+compile = False  # sm_61 (GTX 1080) has limited torch.compile support
