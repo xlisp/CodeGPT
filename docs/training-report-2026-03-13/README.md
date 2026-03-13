@@ -15,7 +15,8 @@
 | [training-data.md](training-data.md) | 数据来源、统计、处理流程 |
 | [bugs-and-fixes.md](bugs-and-fixes.md) | 4 个问题的根因分析与解决方案 |
 | [training-results.md](training-results.md) | Loss 曲线、训练速度、性能分析 |
-| [model-evaluation.md](model-evaluation.md) | 模型实测：补全效果、FIM、perplexity、改进方向 |
+| [model-evaluation.md](model-evaluation.md) | 模型实测（28K tokens）：补全效果、FIM、perplexity、改进方向 |
+| [training-report-8mb-corpus.md](training-report-8mb-corpus.md) | **8MB 语料完整训练报告**（1330 iter，val loss=1.74，含测试结果）|
 | [how-to-run.md](how-to-run.md) | 完整运行方式与注意事项 |
 
 ---
