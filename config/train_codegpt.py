@@ -42,3 +42,4 @@ min_lr = 6e-5
 
 # system
 compile = False  # sm_61 (GTX 1080) has limited torch.compile support
+dtype = 'float16'  # GTX 1080 has no native bfloat16, force float16
