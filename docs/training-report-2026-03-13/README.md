@@ -15,6 +15,7 @@
 | [training-data.md](training-data.md) | 数据来源、统计、处理流程 |
 | [bugs-and-fixes.md](bugs-and-fixes.md) | 4 个问题的根因分析与解决方案 |
 | [training-results.md](training-results.md) | Loss 曲线、训练速度、性能分析 |
+| [model-evaluation.md](model-evaluation.md) | 模型实测：补全效果、FIM、perplexity、改进方向 |
 | [how-to-run.md](how-to-run.md) | 完整运行方式与注意事项 |
 
 ---
