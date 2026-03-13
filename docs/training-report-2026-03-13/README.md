@@ -17,7 +17,8 @@
 | [training-results.md](training-results.md) | Loss 曲线、训练速度、性能分析 |
 | [model-evaluation.md](model-evaluation.md) | 模型实测（28K tokens）：补全效果、FIM、perplexity、改进方向 |
 | [training-report-8mb-corpus.md](training-report-8mb-corpus.md) | **8MB 语料完整训练报告**（1330 iter，val loss=1.74，含测试结果）|
-| [how-to-run.md](how-to-run.md) | 完整运行方式与注意事项 |
+| [repl-usage.md](repl-usage.md) | **REPL 使用手册**：启动、命令、温度调优、示例会话 |
+| [how-to-run.md](how-to-run.md) | 训练运行方式与注意事项 |
 
 ---
 
