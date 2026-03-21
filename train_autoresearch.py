@@ -631,9 +631,43 @@ print()
 
 total_tokens = step * TOTAL_BATCH_SIZE
 
+# Save checkpoint BEFORE eval (so model is available even if eval is interrupted)
+out_dir   = "out-autoresearch"
+os.makedirs(out_dir, exist_ok=True)
+ckpt_path = os.path.join(out_dir, "ckpt.pt")
+torch.save({
+    "model":        model.state_dict(),
+    "config":       config,
+    "step":         step,
+    "total_tokens": total_tokens,
+    "depth":        DEPTH,
+}, ckpt_path)
+print(f"Checkpoint saved → {ckpt_path}")
+
 model.eval()
+# Fast eval: cap at 50 steps (vs autoresearch's 2560 steps designed for H100)
+# Full evaluate_bpb takes ~63 min on GTX 1080; 50 steps takes ~2 min
+FAST_EVAL_STEPS = 50
+from prepare import MAX_SEQ_LEN as _SEQ, get_token_bytes
+import math as _math
+@torch.no_grad()
+def fast_evaluate_bpb(model, tokenizer, batch_size, n_steps=FAST_EVAL_STEPS):
+    token_bytes = get_token_bytes(device="cuda")
+    val_loader  = make_dataloader(tokenizer, batch_size, _SEQ, "val")
+    total_nats, total_bytes = 0.0, 0
+    for _ in range(n_steps):
+        x, y, _ = next(val_loader)
+        loss_flat = model(x, y, reduction='none').view(-1)
+        y_flat    = y.view(-1)
+        nbytes    = token_bytes[y_flat]
+        mask      = nbytes > 0
+        total_nats  += (loss_flat * mask).sum().item()
+        total_bytes += nbytes.sum().item()
+    return total_nats / (_math.log(2) * total_bytes)
+
 with autocast_ctx:
-    val_bpb = evaluate_bpb(model, tokenizer, DEVICE_BATCH_SIZE)
+    val_bpb = fast_evaluate_bpb(model, tokenizer, DEVICE_BATCH_SIZE)
+print(f"(fast eval: {FAST_EVAL_STEPS} steps)")
 
 t_end = time.time()
 startup_time = t_start_training - t_start
@@ -651,16 +685,8 @@ print(f"num_steps:        {step}")
 print(f"num_params_M:     {num_params / 1e6:.1f}")
 print(f"depth:            {DEPTH}")
 
-# Save checkpoint for use with repl_autoresearch.py
-out_dir = "out-autoresearch"
-os.makedirs(out_dir, exist_ok=True)
-ckpt_path = os.path.join(out_dir, "ckpt.pt")
-torch.save({
-    "model": model.state_dict(),
-    "config": config,
-    "val_bpb": val_bpb,
-    "step": step,
-    "total_tokens": total_tokens,
-    "depth": DEPTH,
-}, ckpt_path)
-print(f"\nCheckpoint saved to {ckpt_path}")
+# Update checkpoint with val_bpb
+ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+ckpt["val_bpb"] = val_bpb
+torch.save(ckpt, ckpt_path)
+print(f"Checkpoint updated with val_bpb → {ckpt_path}")
