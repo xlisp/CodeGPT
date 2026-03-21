@@ -92,7 +92,8 @@ class GPTConfig:
 
 
 def norm(x):
-    return F.rms_norm(x, (x.size(-1),))
+    # F.rms_norm requires PyTorch >= 2.4; manual impl for 2.3.x
+    return x * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6).to(x.dtype)
 
 
 def has_ve(layer_idx, n_layer):
@@ -217,10 +218,8 @@ class GPT(nn.Module):
         head_dim = self.config.n_embd // self.config.n_head
         cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
         self.cos, self.sin = cos, sin
-        # CHANGED: float16 instead of bfloat16
-        self.transformer.wte.to(dtype=torch.float16)
-        for ve in self.value_embeds.values():
-            ve.to(dtype=torch.float16)
+        # Keep embeddings in fp32; autocast handles fp16 in forward pass
+        # (bfloat16 cast from original not needed: GradScaler requires fp32 params)
 
     def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None):
         if device is None:
@@ -230,8 +229,7 @@ class GPT(nn.Module):
         t = torch.arange(seq_len, dtype=torch.float32, device=device)
         freqs = torch.outer(t, inv_freq)
         cos, sin = freqs.cos(), freqs.sin()
-        # CHANGED: float16 instead of bfloat16
-        cos, sin = cos.half(), sin.half()
+        cos, sin = cos.half(), sin.half()  # fp16 buffers for memory efficiency
         cos, sin = cos[None, :, None, :], sin[None, :, None, :]
         return cos, sin
 
@@ -345,25 +343,25 @@ polar_express_coeffs = [
 ]
 
 
-def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_t, eps_t, wd_t):
-    p.mul_(1 - lr_t * wd_t)
-    exp_avg.lerp_(grad, 1 - beta1_t)
-    exp_avg_sq.lerp_(grad.square(), 1 - beta2_t)
-    bias1 = 1 - beta1_t ** step_t
-    bias2 = 1 - beta2_t ** step_t
-    denom = (exp_avg_sq / bias2).sqrt() + eps_t
-    step_size = lr_t / bias1
+def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step, lr, beta1, beta2, eps, wd):
+    # All args are Python scalars (no CPU tensors needed without torch.compile)
+    p.mul_(1 - lr * wd)
+    exp_avg.lerp_(grad, 1 - beta1)
+    exp_avg_sq.lerp_(grad.square(), 1 - beta2)
+    bias1 = 1 - beta1 ** step
+    bias2 = 1 - beta2 ** step
+    denom = (exp_avg_sq / bias2).sqrt() + eps
+    step_size = lr / bias1
     p.add_(exp_avg / denom, alpha=-step_size)
 
 
 def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momentum_buffer,
-                    momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim):
+                    momentum, lr, wd, beta2, ns_steps, red_dim):
+    # All scalar args are Python floats (no CPU tensors without torch.compile)
     # Nesterov momentum
-    momentum = momentum_t.to(stacked_grads.dtype)
     momentum_buffer.lerp_(stacked_grads, 1 - momentum)
     g = stacked_grads.lerp_(momentum_buffer, momentum)
-    # Polar express orthogonalization
-    # CHANGED: float16 instead of bfloat16
+    # Polar express orthogonalization (float16 for memory efficiency)
     X = g.half()
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.02 + 1e-6)
     if g.size(-2) > g.size(-1):
@@ -378,7 +376,6 @@ def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momen
             X = a * X + B @ X
     g = X
     # NorMuon variance reduction
-    beta2 = beta2_t.to(g.dtype)
     v_mean = g.float().square().mean(dim=red_dim, keepdim=True)
     red_dim_size = g.size(red_dim)
     v_norm_sq = v_mean.sum(dim=(-2, -1), keepdim=True) * red_dim_size
@@ -390,25 +387,13 @@ def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momen
     final_scale = step_size * (v_norm / v_norm_new.clamp_min(1e-10))
     g = g * final_scale.to(g.dtype)
     # Cautious weight decay + parameter update
-    lr = lr_t.to(g.dtype)
-    wd = wd_t.to(g.dtype)
-    mask = (g * stacked_params) >= 0
-    stacked_params.sub_(lr * g + lr * wd * stacked_params * mask)
+    mask = (g * stacked_params.half()) >= 0
+    stacked_params.sub_(lr * g.float() + lr * wd * stacked_params * mask.float())
 
 
 class MuonAdamW(torch.optim.Optimizer):
     def __init__(self, param_groups):
         super().__init__(param_groups, defaults={})
-        self._adamw_step_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_beta1_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_beta2_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_eps_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_momentum_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_beta2_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
 
     def _step_adamw(self, group):
         for p in group['params']:
@@ -421,15 +406,9 @@ class MuonAdamW(torch.optim.Optimizer):
                 state['exp_avg'] = torch.zeros_like(p)
                 state['exp_avg_sq'] = torch.zeros_like(p)
             state['step'] += 1
-            self._adamw_step_t.fill_(state['step'])
-            self._adamw_lr_t.fill_(group['lr'])
-            self._adamw_beta1_t.fill_(group['betas'][0])
-            self._adamw_beta2_t.fill_(group['betas'][1])
-            self._adamw_eps_t.fill_(group['eps'])
-            self._adamw_wd_t.fill_(group['weight_decay'])
             adamw_step_fused(p, grad, state['exp_avg'], state['exp_avg_sq'],
-                            self._adamw_step_t, self._adamw_lr_t, self._adamw_beta1_t,
-                            self._adamw_beta2_t, self._adamw_eps_t, self._adamw_wd_t)
+                             state['step'], group['lr'], group['betas'][0],
+                             group['betas'][1], group['eps'], group['weight_decay'])
 
     def _step_muon(self, group):
         params = group['params']
@@ -447,14 +426,12 @@ class MuonAdamW(torch.optim.Optimizer):
         red_dim = -1 if shape[-2] >= shape[-1] else -2
         stacked_grads = torch.stack([p.grad for p in params])
         stacked_params = torch.stack(params)
-        self._muon_momentum_t.fill_(group["momentum"])
-        self._muon_beta2_t.fill_(group["beta2"] if group["beta2"] is not None else 0.0)
-        self._muon_lr_t.fill_(group["lr"] * max(1.0, shape[-2] / shape[-1])**0.5)
-        self._muon_wd_t.fill_(group["weight_decay"])
+        lr = group["lr"] * max(1.0, shape[-2] / shape[-1])**0.5
+        beta2 = group["beta2"] if group["beta2"] is not None else 0.0
         muon_step_fused(stacked_grads, stacked_params,
                         state["momentum_buffer"], state["second_momentum_buffer"],
-                        self._muon_momentum_t, self._muon_lr_t, self._muon_wd_t,
-                        self._muon_beta2_t, group["ns_steps"], red_dim)
+                        group["momentum"], lr, group["weight_decay"],
+                        beta2, group["ns_steps"], red_dim)
         torch._foreach_copy_(params, list(stacked_params.unbind(0)))
 
     @torch.no_grad()
@@ -474,7 +451,7 @@ ASPECT_RATIO = 64
 HEAD_DIM = 128
 WINDOW_PATTERN = "SSSL"
 
-TOTAL_BATCH_SIZE = 2**17   # reduced from 2**19 for GTX 1080 (fewer grad accum steps)
+TOTAL_BATCH_SIZE = 2**15   # 32768 tokens/step; GTX 1080 8GB
 EMBEDDING_LR = 0.6
 UNEMBEDDING_LR = 0.004
 MATRIX_LR = 0.04
@@ -486,7 +463,7 @@ WARMDOWN_RATIO = 0.5
 FINAL_LR_FRAC = 0.0
 
 DEPTH = 8
-DEVICE_BATCH_SIZE = 32     # reduced from 128 for 8GB VRAM
+DEVICE_BATCH_SIZE = 4      # 4 × 2048 = 8192 tokens/fwdbwd; fits in 8GB
 
 # ---------------------------------------------------------------------------
 # Setup
