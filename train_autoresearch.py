@@ -650,3 +650,17 @@ print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
 print(f"num_steps:        {step}")
 print(f"num_params_M:     {num_params / 1e6:.1f}")
 print(f"depth:            {DEPTH}")
+
+# Save checkpoint for use with repl_autoresearch.py
+out_dir = "out-autoresearch"
+os.makedirs(out_dir, exist_ok=True)
+ckpt_path = os.path.join(out_dir, "ckpt.pt")
+torch.save({
+    "model": model.state_dict(),
+    "config": config,
+    "val_bpb": val_bpb,
+    "step": step,
+    "total_tokens": total_tokens,
+    "depth": DEPTH,
+}, ckpt_path)
+print(f"\nCheckpoint saved to {ckpt_path}")
