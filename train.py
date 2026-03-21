@@ -21,7 +21,11 @@ Usage:
     python train.py config/train_codegpt_small.py --batch_size=32 --max_iters=5000
 """
 
+# Memory allocator optimization (from autoresearch): reduces fragmentation on long runs
 import os
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
+import gc
 import time
 import math
 import pickle
@@ -123,6 +127,7 @@ if master_process:
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+torch.set_float32_matmul_precision("high")
 device_type = 'cuda' if 'cuda' in device else ('mps' if 'mps' in device else 'cpu')
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
@@ -369,6 +374,12 @@ while True:
 
     iter_num += 1
     local_iter_num += 1
+
+    # GC management (from autoresearch): freeze after first iter to prevent ~500ms GC stalls
+    if local_iter_num == 1:
+        gc.collect()
+        gc.freeze()
+        gc.disable()
 
     if iter_num > max_iters:
         break
