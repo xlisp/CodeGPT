@@ -187,6 +187,40 @@ python bench.py --n_layer=6 --n_embd=384 --batch_size=16
 | `<\|lang:javascript\|>` | 50264 | JavaScript 语言标识 |
 | ... | 50265-50278 | 其他语言标识 |
 
+## 训练报告
+
+### [2026-03-21：引入 autoresearch 训练框架](docs/training-report-2026-03-21/autoresearch-training.md)
+
+从原版 CodeGPT 迁移到 [autoresearch](https://github.com/karpathy/autoresearch) 数据管道与模型架构，在 GTX 1080 上运行。
+
+**核心变化**：
+
+| 问题 | 原版 | 改进后 |
+|------|------|--------|
+| 训练数据太少 | 28K tokens（本地 Python 文件）| 400B tokens（karpathy/climbmix-400b-shuffle）|
+| 架构过时 | nanoGPT（2022）| RoPE + RMSNorm + 滑动窗口 + Value Residual |
+| 优化器 | AdamW | Muon（矩阵参数）+ AdamW（其余）|
+| 实验周期 | 64 天完整训练 | 5 分钟固定预算，快速迭代 |
+
+GTX 1080 适配（详见文档）：Flash Attention 3 → PyTorch SDPA，bfloat16 → float16 + GradScaler，去掉 torch.compile。
+
+**运行**：
+```bash
+# 数据准备（一次性，约 5 分钟）
+cd /home/xlisp/PyPro/autoresearch
+~/miniconda3/envs/codegpt/bin/python prepare.py --num-shards 2
+
+# 训练（5 分钟预算）
+cd /home/xlisp/PyPro/CodeGPT
+~/miniconda3/envs/codegpt/bin/python -W ignore train_autoresearch.py
+```
+
+### [2026-03-13：GTX 1080 初始训练报告](docs/training-report-2026-03-13/)
+
+首次在 GTX 1080 上验证训练流程（50 iter），确认 val loss 从 10.93 降至 5.36，修复 weight tying bug 和 FIM target 长度不匹配 bug。
+
+---
+
 ## 致谢
 
-本项目基于 [Andrej Karpathy](https://github.com/karpathy) 的 [nanoGPT](https://github.com/karpathy/nanoGPT) 进行扩展开发。
+本项目基于 [Andrej Karpathy](https://github.com/karpathy) 的 [nanoGPT](https://github.com/karpathy/nanoGPT) 和 [autoresearch](https://github.com/karpathy/autoresearch) 进行扩展开发。
