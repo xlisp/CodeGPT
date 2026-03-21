@@ -30,7 +30,11 @@ import torch.nn.functional as F
 
 # Use autoresearch's data pipeline directly
 sys.path.insert(0, '/home/xlisp/PyPro/autoresearch')
-from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
+from prepare import MAX_SEQ_LEN, Tokenizer, make_dataloader, evaluate_bpb
+
+# Override TIME_BUDGET: autoresearch default is 300s (5 min for H100 experiments)
+# We want the best model, not care about time → 24 hours
+TIME_BUDGET = 86400   # seconds (24 hours); set lower to stop earlier
 
 # ---------------------------------------------------------------------------
 # SDPA replacement for Flash Attention 3 (GTX 1080 compatible)
@@ -443,15 +447,14 @@ class MuonAdamW(torch.optim.Optimizer):
                 self._step_muon(group)
 
 # ---------------------------------------------------------------------------
-# Hyperparameters
-# (reduce DEVICE_BATCH_SIZE if OOM; GTX 1080 has 8GB)
+# Hyperparameters — BEST EFFECT config for GTX 1080 8GB
 # ---------------------------------------------------------------------------
 
 ASPECT_RATIO = 64
 HEAD_DIM = 128
 WINDOW_PATTERN = "SSSL"
 
-TOTAL_BATCH_SIZE = 2**15   # 32768 tokens/step; GTX 1080 8GB
+TOTAL_BATCH_SIZE = 2**17   # 131072 tokens/step  (larger = more stable gradients)
 EMBEDDING_LR = 0.6
 UNEMBEDDING_LR = 0.004
 MATRIX_LR = 0.04
@@ -459,11 +462,11 @@ SCALAR_LR = 0.5
 WEIGHT_DECAY = 0.2
 ADAM_BETAS = (0.8, 0.95)
 WARMUP_RATIO = 0.0
-WARMDOWN_RATIO = 0.5
+WARMDOWN_RATIO = 0.2       # shorter warmdown → more time at peak LR
 FINAL_LR_FRAC = 0.0
 
-DEPTH = 8
-DEVICE_BATCH_SIZE = 4      # 4 × 2048 = 8192 tokens/fwdbwd; fits in 8GB
+DEPTH = 12                 # 12 layers, n_embd=768 (~125M params, GPT-2 scale)
+DEVICE_BATCH_SIZE = 2      # 2×2048=4096 tokens/fwd; safer for 8GB with larger model
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -645,9 +648,9 @@ torch.save({
 print(f"Checkpoint saved → {ckpt_path}")
 
 model.eval()
-# Fast eval: cap at 50 steps (vs autoresearch's 2560 steps designed for H100)
-# Full evaluate_bpb takes ~63 min on GTX 1080; 50 steps takes ~2 min
-FAST_EVAL_STEPS = 50
+# Fast eval: cap at 200 steps (~8 min on GTX 1080) for a good BPB estimate
+# Full autoresearch eval = 2560 steps = ~63 min; not worth it
+FAST_EVAL_STEPS = 200
 from prepare import MAX_SEQ_LEN as _SEQ, get_token_bytes
 import math as _math
 @torch.no_grad()
