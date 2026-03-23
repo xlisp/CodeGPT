@@ -5,3 +5,4 @@ __pycache__
 *.bin
 out-codegpt/
 out-codegpt-old/
+out-autoresearch
