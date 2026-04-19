@@ -53,6 +53,16 @@ ChatGPT 成功的另外两块关键拼图：
 - **MoE 的本质**：把 `Block.mlp`（`model.py:93-105`）换成"N 个专家 + 可微路由器"，每个 token 只激活 top-k 个专家——就是**可微分的 if/else**。Mixtral 8x7B 为什么"容量 47B、算力 13B"
 - **该选哪条路**：决策表、CodeGPT 要加 function calling 时的具体建议（先联合 SFT，不要急着上 MoE）
 
+### [RAG 还是 SFT：面对一堆私有数据，该怎么选？](docs/RAG_VS_SFT.md)
+
+"有一堆公司内部文档 / 代码库 / 知识库，怎么让 LLM 学会它们"——这是每个落地团队都会问的问题。本文从 `model.py:177-198` 的 forward 入手，把看似模糊的选型变成一个数学上清晰的二分：
+
+- **RAG 改 `idx`，SFT 改 `W`**：一个是推理时拼 prompt，完全不动参数；一个是跑 `F.cross_entropy` 把知识压进权重。理解这一点，90% 的困惑就没了
+- **六维决策表**：数据性质（事实 vs 风格）、更新频率、数据量、可解释性 / 溯源、推理延迟、隐私（含 GDPR "被遗忘权"）——给出什么场景该走哪条路的速查指南
+- **为什么默认先做 RAG**：零训练成本、可解释、数据可撤回、和 base model 解耦；以及 RAG 做不到、必须 SFT 的五类场景（风格、领域推理、延迟、离线、抗注入）
+- **真正的评估方法**：怎么切数据（train / heldout / 无关三段）、三类 metric（正确率 + 引用准确性 + 通用能力回归）、四条 baseline（base / rag / sft / sft+rag），把"哪个更好"变成可复现的实验结论
+- **回到 CodeGPT**：私有代码库场景的具体节奏——先两周搭 RAG，观察短板再决定要不要 continued pretraining
+
 ---
 
 ## 特性
@@ -85,7 +95,9 @@ CodeGPT/
     ├── DEEP_DIVE.md                        # 从 RNN 到 CodeGPT 的完整进化史
     ├── COMPRESSION_IS_INTELLIGENCE.md      # 压缩即智能的认知哲学
     ├── RLHF_AND_PLATONIC_REPRESENTATION.md # RLHF 对齐与柏拉图表征
-    └── DIFFERENTIABLE_PROGRAMMING.md       # 深度学习是可微分编程：从线性方程到大模型
+    ├── DIFFERENTIABLE_PROGRAMMING.md       # 深度学习是可微分编程：从线性方程到大模型
+    ├── SFT_FORGETTING_AND_MOE.md           # 多次 SFT 的灾难性遗忘与 MoE 的本质
+    └── RAG_VS_SFT.md                       # RAG 还是 SFT：私有数据的选型与评估方法
 ```
 
 ## 快速开始
