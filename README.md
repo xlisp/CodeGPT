@@ -34,6 +34,15 @@ ChatGPT 成功的另外两块关键拼图：
 - **柏拉图表征假说**："盲人摸象"的终局——不同模型从不同维度观察现实，但内部表征趋向收敛。多头注意力是模型内部的 12 个"盲人"，多语言训练让 Python/JS/Rust 收敛到同一个"算法理想型"
 - **CodeGPT 在这个图景中的位置**：已实现预训练 + 推理时弱对齐（temperature/top-p），未来可扩展 SFT + DPO
 
+### [深度学习是可微分编程：从 y = wx + b 讲到 CodeGPT](docs/DIFFERENTIABLE_PROGRAMMING.md)
+
+解读 LeCun "Deep Learning est mort. Vive Differentiable Programming!" 背后的架构视角：
+
+- **从线性方程到梯度下降**：为什么有了 `autograd` 之后，"解方程"就被"写前向程序 + `loss.backward()`"取代
+- **把经典程序翻译成可微分形式**：`softmax` 是 `argmax` 的可微近似，注意力是查表的可微版本，残差是变量绑定的可微版本
+- **`nn.Module` 是函数，`forward` 是 `main`**：CodeGPT 的 `forward`（`model.py:177-198`）就是一段普通 Python，只是每个操作都可微
+- **程序员 vs. 梯度下降的分工**：人写架构（层数、注意力 mask、权重绑定、`ignore_index=-1`），梯度下降写参数。训练 = 编译，推理 = 执行
+
 ---
 
 ## 特性
@@ -65,7 +74,8 @@ CodeGPT/
 └── docs/
     ├── DEEP_DIVE.md                        # 从 RNN 到 CodeGPT 的完整进化史
     ├── COMPRESSION_IS_INTELLIGENCE.md      # 压缩即智能的认知哲学
-    └── RLHF_AND_PLATONIC_REPRESENTATION.md # RLHF 对齐与柏拉图表征
+    ├── RLHF_AND_PLATONIC_REPRESENTATION.md # RLHF 对齐与柏拉图表征
+    └── DIFFERENTIABLE_PROGRAMMING.md       # 深度学习是可微分编程：从线性方程到大模型
 ```
 
 ## 快速开始
