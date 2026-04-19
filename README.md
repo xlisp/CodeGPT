@@ -1,4 +1,4 @@
-# CodeGPT
+# Code GPT & Learning
 
 一个专注于代码生成的 GPT 模型，基于 [nanoGPT](https://github.com/karpathy/nanoGPT) 扩展，支持 Fill-in-the-Middle (FIM) 代码补全和多语言代码生成。
 
