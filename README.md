@@ -72,6 +72,16 @@ ChatGPT 成功的另外两块关键拼图：
 - **真正的评估方法**：怎么切数据（train / heldout / 无关三段）、三类 metric（正确率 + 引用准确性 + 通用能力回归）、四条 baseline（base / rag / sft / sft+rag），把"哪个更好"变成可复现的实验结论
 - **回到 CodeGPT**：私有代码库场景的具体节奏——先两周搭 RAG，观察短板再决定要不要 continued pretraining
 
+### [合成数据：怎么把一堆垃圾代码变成高质量训练数据](docs/SYNTHETIC_DATA.md)
+
+回答"Claude 怎么把垃圾代码变废为宝"这个实战问题。把"合成数据"从一项模糊的技术拆成一条有具体工具链的流水线：
+
+- **先定义"垃圾"**：F1 语法错、F2 语义错、F3 风格噪声、F4 任务无关——四种故障需要四种不同工具，没有银弹
+- **六环节流水线**：过滤（AST/ruff/mypy 的确定性标注）→ 修复（black/isort 的规则改写）→ 执行反馈（interpreter 是最诚实的 reward）→ 强模型蒸馏（output / input-output / 思维链三层）→ Self-Instruct 循环造题造解 → Self-Refine 让模型批评自己
+- **SFT vs RL 对"高质量"的定义根本不同**：SFT 要 `(prompt, response)` 且 response 必须是"想让模型学会的样子"；RL 要 `(prompt, chosen, rejected)` 且优先 verifiable reward（测试通过率、字符串匹配），不可验证的 reward 留给 DPO
+- **人工标注的四个"最划算点"**：种子（100-1000 条）、分歧样本（active learning）、安全/合规边界、eval set。总人工占比应控制在 1%-5%——低了种子不够，高了没用好合成
+- **回到 CodeGPT**：基于现有 `prepare.py` + `apply_fim_transform` 的最小可行升级路径——加过滤层、加修复层、加 doctest 执行反馈、合成 SFT/RL 数据，一条到能跑 SFT + 初步 RL 的完整路线
+
 ---
 
 ## 特性
@@ -107,7 +117,8 @@ CodeGPT/
     ├── DIFFERENTIABLE_PROGRAMMING.md       # 深度学习是可微分编程：从线性方程到大模型
     ├── SFT_FORGETTING_AND_MOE.md           # 多次 SFT 的灾难性遗忘与 MoE 的本质
     ├── SFT_RL_INFERENCE_MECHANICS.md       # 训练写权重，推理用权重 + 脚手架：SFT/RL 如何在使用时生效
-    └── RAG_VS_SFT.md                       # RAG 还是 SFT：私有数据的选型与评估方法
+    ├── RAG_VS_SFT.md                       # RAG 还是 SFT：私有数据的选型与评估方法
+    └── SYNTHETIC_DATA.md                   # 合成数据：垃圾代码变废为宝的六环节流水线
 ```
 
 ## 快速开始
