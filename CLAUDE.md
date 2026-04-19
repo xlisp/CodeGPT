@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CodeGPT is a GPT model specialized for code generation, extended from nanoGPT with Fill-in-the-Middle (FIM) support, code-aware special tokens, and multi-language awareness. The `docs/` directory contains extensive technical essays (Chinese) that are a deliberate part of the project — they tie architectural decisions back to the code in `model.py`. Treat them as authoritative for the "why" behind design choices.
+CodeGPT is a GPT model specialized for code generation, extended from nanoGPT with Fill-in-the-Middle (FIM) support, code-aware special tokens, and multi-language awareness.
+
+The `docs/` directory is a **大模型科普扫盲** (large-model literacy) resource — essays in Chinese that explain GPT / Transformer / RLHF / representation theory and tie each concept back to the code in `model.py`, `train.py`, `tokenizer.py`. README.md contains the index of these essays; when writing or editing anything in `docs/`, follow these principles:
+
+- **Prefer a few lines of key Python / PyTorch code over mathematical formulas.** Show the concept via `nn.Linear`, `F.softmax`, `torch.tril`, `F.cross_entropy`, etc. — the shortest runnable snippet that makes the idea click.
+- When a formula is unavoidable, pair it with the equivalent code excerpt (ideally a real line from this repo with a `model.py:NN` reference).
+- Keep examples grounded in PyTorch and standard libraries already used in the project (`torch`, `torch.nn`, `tiktoken`, `numpy`). Do not introduce new dependencies just to illustrate a point.
+- Treat the docs as authoritative for the "why" behind design choices — code comments stay terse; rationale lives in `docs/`.
 
 ## Common Commands
 
