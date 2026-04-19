@@ -53,6 +53,15 @@ ChatGPT 成功的另外两块关键拼图：
 - **MoE 的本质**：把 `Block.mlp`（`model.py:93-105`）换成"N 个专家 + 可微路由器"，每个 token 只激活 top-k 个专家——就是**可微分的 if/else**。Mixtral 8x7B 为什么"容量 47B、算力 13B"
 - **该选哪条路**：决策表、CodeGPT 要加 function calling 时的具体建议（先联合 SFT，不要急着上 MoE）
 
+### [训练写权重，推理用权重 + 脚手架：SFT / RL 训完之后到底是怎么生效的](docs/SFT_RL_INFERENCE_MECHANICS.md)
+
+回答"使用大模型时是纯靠 transformer 参数预测，还是需要代码配合"这个深层问题。从 `model.py:177-198` 的 `forward` 入手，把大模型系统拆成"W（权重）+ 脚手架（代码）"两层：
+
+- **三步训练的分工**：预训练写入语言/知识（改所有参数，幅度大）→ SFT 写入对话格式（同样的 `F.cross_entropy`，prompt 段 target 设 -1）→ RL 写入偏好/品味（KL 散度约束幅度）。为什么必须这个顺序，为什么跳过 SFT 直接 RL 会崩到"奖励黑客"
+- **纯靠 W 的一半 vs 需要代码的一半**：每次 token 预测确实只是 `W · x`，但 chat template / stop_tokens / 采样参数构成的"协议"必须和训练时完全一致——否则 `W` 里的 SFT/RL 能力"沉睡"不醒。本地跑开源模型停不下来，十有八九就是 stop_tokens 没配对
+- **W 根本装不下的能力**：tool calling（`execute_tool` 是纯外部代码）、RAG（知识不进 W）、长期记忆（超 `block_size` 必须外存）、安全过滤（双保险）——ChatGPT 是"模型 + 大量代码"的产品
+- **回到 CodeGPT**：一张对齐表列出 `sample.py:101 encode_prompt`、`sample.py:98 stop_tokens`、`model.py:279 temperature` 等——本项目的推理脚手架虽然简单但已经完整，是理解"训练-推理对齐"的最小样本
+
 ### [RAG 还是 SFT：面对一堆私有数据，该怎么选？](docs/RAG_VS_SFT.md)
 
 "有一堆公司内部文档 / 代码库 / 知识库，怎么让 LLM 学会它们"——这是每个落地团队都会问的问题。本文从 `model.py:177-198` 的 forward 入手，把看似模糊的选型变成一个数学上清晰的二分：
@@ -97,6 +106,7 @@ CodeGPT/
     ├── RLHF_AND_PLATONIC_REPRESENTATION.md # RLHF 对齐与柏拉图表征
     ├── DIFFERENTIABLE_PROGRAMMING.md       # 深度学习是可微分编程：从线性方程到大模型
     ├── SFT_FORGETTING_AND_MOE.md           # 多次 SFT 的灾难性遗忘与 MoE 的本质
+    ├── SFT_RL_INFERENCE_MECHANICS.md       # 训练写权重，推理用权重 + 脚手架：SFT/RL 如何在使用时生效
     └── RAG_VS_SFT.md                       # RAG 还是 SFT：私有数据的选型与评估方法
 ```
 
