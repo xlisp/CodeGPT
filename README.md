@@ -43,6 +43,16 @@ ChatGPT 成功的另外两块关键拼图：
 - **`nn.Module` 是函数，`forward` 是 `main`**：CodeGPT 的 `forward`（`model.py:177-198`）就是一段普通 Python，只是每个操作都可微
 - **程序员 vs. 梯度下降的分工**：人写架构（层数、注意力 mask、权重绑定、`ignore_index=-1`），梯度下降写参数。训练 = 编译，推理 = 执行
 
+### [多次 SFT 的灾难性遗忘：SFT 的本质、MoE 的本质](docs/SFT_FORGETTING_AND_MOE.md)
+
+回答一个工程上每个团队都会踩到的坑——"第二次 SFT 把第一次的能力盖掉了"怎么办：
+
+- **SFT 的本质**：和预训练是同一个 loss（`F.cross_entropy(..., ignore_index=-1)`），只在 prompt 段把 target 设为 -1——所以它遵守预训练的所有规律，包括遗忘
+- **灾难性遗忘的数学**：梯度下降只看当前 batch，从根上不可能知道"之前学过什么"。用 Fisher 信息矩阵量化每个参数对老任务的重要性
+- **解法谱系**：数据混合（rehearsal，工业界默认）、LoRA 多适配器（物理隔离增量）、EWC（给重要参数加弹簧）、多任务联合 SFT（一次训完根治）
+- **MoE 的本质**：把 `Block.mlp`（`model.py:93-105`）换成"N 个专家 + 可微路由器"，每个 token 只激活 top-k 个专家——就是**可微分的 if/else**。Mixtral 8x7B 为什么"容量 47B、算力 13B"
+- **该选哪条路**：决策表、CodeGPT 要加 function calling 时的具体建议（先联合 SFT，不要急着上 MoE）
+
 ---
 
 ## 特性
