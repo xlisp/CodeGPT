@@ -72,6 +72,18 @@ ChatGPT 成功的另外两块关键拼图：
 - **真正的评估方法**：怎么切数据（train / heldout / 无关三段）、三类 metric（正确率 + 引用准确性 + 通用能力回归）、四条 baseline（base / rag / sft / sft+rag），把"哪个更好"变成可复现的实验结论
 - **回到 CodeGPT**：私有代码库场景的具体节奏——先两周搭 RAG，观察短板再决定要不要 continued pretraining
 
+### [物理学的影子：量子力学与统计力学如何塑造了深度学习](docs/PHYSICS_AND_DEEP_LEARNING.md)
+
+为什么很多量子力学、统计力学方向的研究生转去做深度学习几乎没有"门槛"？因为他们脑子里的核心工具在大模型里几乎一一对应。本文把这些对应关系一条条钉到 `model.py` 的具体行号上：
+
+- **Softmax 就是玻尔兹曼分布**：`F.softmax(logits/T)`（`model.py:301`、`model.py:279`）字面上就是 $\exp(-E/kT)/Z$，温度参数直接来自热力学；cross-entropy（`model.py:192`）等价于自由能差
+- **注意力机制 = 连续型 Hopfield 网络**：2020 年 *Hopfield Networks is All You Need* 证明了这一点。Q·Kᵀ + softmax + 加权求和（`model.py:66-68`）就是一次自旋玻璃能量下降迭代——所以 2024 年 Hopfield 和 Hinton 拿了诺贝尔物理奖
+- **SGD 是 Langevin 动力学**：mini-batch 梯度噪声 + dropout（`train.py:68`）+ 高斯初始化（`model.py:171`）——loss landscape 是球形自旋玻璃，"绝大多数局部极小都几乎一样好"是统计物理给的早期理论支撑
+- **Transformer 自带量子力学结构**：embedding 是 Hilbert 空间态向量、注意力内积是 Born rule 的实数版本、`multinomial` 采样就是测量塌缩
+- **变分原理一以贯之**：从基态能量、ELBO、到 RLHF 的 KL 约束——同一种带约束变分问题
+- **重整化群 = 深度网络的层级抽象**：12 层 Block 沿尺度方向粗粒化；scaling laws 的幂律就是临界点附近的标度行为，"涌现能力"对应相变
+- **思想史地图**：13 行对应表 + 写给打算从物理转 AI 的研究生的方法论建议——你不是在跨界，你在回家
+
 ### [合成数据：怎么把一堆垃圾代码变成高质量训练数据](docs/SYNTHETIC_DATA.md)
 
 回答"Claude 怎么把垃圾代码变废为宝"这个实战问题。把"合成数据"从一项模糊的技术拆成一条有具体工具链的流水线：
@@ -118,7 +130,8 @@ CodeGPT/
     ├── SFT_FORGETTING_AND_MOE.md           # 多次 SFT 的灾难性遗忘与 MoE 的本质
     ├── SFT_RL_INFERENCE_MECHANICS.md       # 训练写权重，推理用权重 + 脚手架：SFT/RL 如何在使用时生效
     ├── RAG_VS_SFT.md                       # RAG 还是 SFT：私有数据的选型与评估方法
-    └── SYNTHETIC_DATA.md                   # 合成数据：垃圾代码变废为宝的六环节流水线
+    ├── SYNTHETIC_DATA.md                   # 合成数据：垃圾代码变废为宝的六环节流水线
+    └── PHYSICS_AND_DEEP_LEARNING.md        # 物理学的影子：量子力学与统计力学如何塑造了深度学习
 ```
 
 ## 快速开始
