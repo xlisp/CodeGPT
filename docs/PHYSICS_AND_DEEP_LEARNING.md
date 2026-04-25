@@ -1,6 +1,6 @@
 # 物理学的影子：量子力学与统计力学如何塑造了深度学习
 
-> 为什么很多量子力学、统计力学方向的研究生转去做深度学习几乎没有"门槛"？因为他们脑子里的核心工具——配分函数、玻尔兹曼分布、变分原理、Langevin 动力学、重整化、对称性——在大模型里几乎一一对应。这篇文档把这些对应关系一条条钉到 `model.py` 的具体行号上，让"物理直觉"和"PyTorch 代码"之间的等号显式可见。
+> 为什么很多量子力学、统计力学方向的研究生转去做深度学习几乎没有"门槛"？因为他们脑子里的核心工具——配分函数、玻尔兹曼分布、变分原理、Langevin 动力学、重整化、对称性、向量代数、熵、路径积分、链式法则——在大模型里几乎一一对应。这篇文档把这些对应关系一条条钉到 `model.py` 的具体行号上，让"物理直觉"和"PyTorch 代码"之间的等号显式可见。
 
 ---
 
@@ -303,7 +303,294 @@ L(N) ∝ N^(-α)
 
 ---
 
-## 11. 思想史地图：为什么物理学家转 AI 没有门槛
+## 11. 向量化编程：物理学家从牛顿那一天就在用的描述方式
+
+物理学第一节课就教向量——力 $\vec{F}$、速度 $\vec{v}$、加速度 $\vec{a}$ 都是向量，**有大小有方向，可以分解可以合成**。整个经典力学就建立在 $\mathbb{R}^3$ 空间的向量代数之上。物理学家天然用向量思维：状态 = 一个高维空间的点；演化 = 这个点在空间里运动；相互作用 = 向量加法或线性变换。
+
+深度学习的"向量化（vectorization）"不是工程优化的产物——是**物理学已经用了 300 多年的描述语言**直接搬过来。
+
+### 11.1 token + position = 力的合成
+
+```python
+# model.py:183-185
+tok_emb = self.transformer.wte(idx)
+pos_emb = self.transformer.wpe(pos)
+x = self.transformer.drop(tok_emb + pos_emb)
+```
+
+这三行就是物理学里"力的合成"的直接搬运。每个 token 携带一个语义向量，每个位置贡献一个位置向量，**两个向量相加 = 合力**。模型从这一点开始只看到一个综合后的向量，恰如刚体的运动只取决于合力——分力的具体来源对后续动力学不可见。
+
+如果你做过经典力学题"小球同时受重力 + 摩擦力 + 弹力"——把三个矢量加起来求合力——你已经在做 Transformer 的输入层运算了。
+
+### 11.2 矩阵 = 线性变换 = 物理变换
+
+物理里坐标变换、Lorentz 变换、保哈密顿量的对称变换都是矩阵。深度学习的核心运算 `nn.Linear` 也是矩阵：
+
+```python
+# model.py:36
+self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+```
+
+物理学家会立即把这一行识别为"一个 3 倍维度的线性变换"——把状态向量同时投影到三组基底（Q, K, V），与"在动量基、能量基、位置基里同时观察一个量子态"完全同构。
+
+### 11.3 张量积结构：多头注意力 = 多体系统
+
+物理多粒子态的总希尔伯特空间是各粒子空间的张量积：$\mathcal{H} = \mathcal{H}_1 \otimes \mathcal{H}_2 \otimes \cdots \otimes \mathcal{H}_n$。多头注意力做的是同构操作：
+
+```python
+# model.py:54-56
+k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+```
+
+把一个 `n_embd` 维向量 reshape 成 `n_head × head_dim`——本质上是把一个大希尔伯特空间分解成 12 个子空间的张量积。每个 head 在自己的子空间里独立做 attention，最后再合并。这就是物理里"独立子系统并行演化，最后合成总态"的标准技法。
+
+### 11.4 为什么向量化提速？因为 GPU 是个大向量机
+
+物理上，力作用于多个粒子是同时的、并行的——大自然不串行。GPU 的 SIMD 架构（同一指令作用于成千上万个数据）就是这种"并行向量"的硬件实现。当你写：
+
+```python
+# model.py:66
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+```
+
+GPU 一次性算出 `B × n_head × T × T` 个内积——这不是性能 trick，是把"向量化数学"映射到"向量化硬件"的自然结果。
+
+物理学家的代码（N 体问题、量子电路模拟、格点 QCD、有限元）几十年前就高度向量化。"把 for 循环改成矩阵乘"对他们零心理障碍——这是他们的母语。
+
+### 11.5 batch 维度是另一种"独立粒子并行"
+
+```python
+# model.py:179
+b, t = idx.size()
+```
+
+`B` 是 batch，`T` 是序列长度。`B` 个独立样本完全平行地走完整个网络——结构上等价于物理里"统计系综（ensemble）"概念：同样的哈密顿量作用于 B 个独立的初始状态副本，互不干扰、并行演化。物理学家做 Monte Carlo 时一次跑几千个独立 Markov chain 是家常便饭，理解 batch 维度毫不费力。
+
+---
+
+## 12. 熵：从锅炉房一路走到大模型
+
+Clausius 1865 年发明"entropy"这个词来刻画热机的不可逆性。Boltzmann 1877 年给出微观定义：
+
+```
+S = k_B · log W
+```
+
+其中 $W$ 是宏观态对应的微观态数。这块墓志铭刻在他的墓碑上。Shannon 1948 年研究通信问题时独立得到了几乎一模一样的公式：
+
+```
+H = -Σ p_i log p_i
+```
+
+物理学家看到 Shannon 公式会一眼认出这就是 Boltzmann 熵的连续概率版本（连常数 $k_B$ 都可以看作单位选择问题）。两个领域的"熵"是同一个数学对象，被用了三种不同的角色：
+
+### 12.1 训练 loss = 熵的下降
+
+```python
+# model.py:192
+loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
+                       targets.view(-1), ignore_index=-1)
+```
+
+Cross-entropy 满足分解：
+
+```
+H(p_data, q_θ) = H(p_data) + KL(p_data ‖ q_θ)
+```
+
+$H(p_\text{data})$ 是数据本身的熵（不可约的"纯粹随机性"，由数据分布固定）；$\text{KL}$ 是模型分布偏离数据的"额外熵"。**训练 = 把 KL 拍到零**，让模型的不确定性降到数据本身的不确定性下限。
+
+物理学家会注意到一件有趣的事：**训练过程是局部熵减**。模型权重从初始的高熵随机状态被推向能精确编码数据规律的低熵状态。这不违反热力学第二定律——SGD 把熵"排放"到了优化器的状态、GPU 的散热、和数据的访问历史里。整个过程结构上对应**信息论里的 Maxwell 妖**——梯度信号就是那只看着分子运动决定开关阀门的小妖。
+
+### 12.2 注意力的熵：模型在"专注"还是"摊开"？
+
+```python
+# model.py:68
+att = F.softmax(att, dim=-1)
+```
+
+每个 token 对其他 token 的注意力分布都有一个熵 $H = -\sum_j a_{ij} \log a_{ij}$：
+
+- 高熵：均匀注意（不知道该看哪里，多见于早期层）
+- 低熵：尖锐注意（在做精确检索，多见于 induction heads）
+
+可解释性研究（Anthropic 等）已经把"attention entropy"作为标准诊断指标。物理学家做凝聚态时计算"局域熵"分析相变区，做这件事完全不需要新工具。
+
+### 12.3 RL 的熵正则化：直接是自由能的 -TS 项
+
+PPO/SAC 训 RLHF 时常加一个熵正则项 $-\beta \cdot H(\pi_\theta(\cdot|s))$，鼓励策略保持探索性、防止过早塌缩到单点。物理学家会立刻认出这就是**自由能 $F = E - TS$ 里的 $-TS$ 项**——温度 $T$ 越高越鼓励熵大（exploration），$T$ 越低越鼓励能量低（exploitation）。RL 调 entropy coefficient 就是在调温度。
+
+这跟 RLHF 加 $\text{KL}(\pi_\theta \| \pi_\text{ref})$ 是同家族——都是用拉格朗日乘子约束分布形态，就是平均场近似的标准操作。
+
+### 12.4 数据增强 / dropout：人工注入熵
+
+```python
+# train.py:68
+dropout = 0.1
+```
+
+Dropout 主动给激活注入随机性——人为提高网络内部的熵。从信息论看是降低了表征的"过度确定性"，从物理学看是给系统加温防止它落入虚假的低能局部极小。两种解释指向同一个动作。
+
+---
+
+## 13. 路径积分：自回归生成本质上是 Feynman 求和
+
+Feynman 1948 年给量子力学一个新表述：粒子从 $A$ 到 $B$ 的概率振幅 = 对所有可能路径的振幅相干求和：
+
+```
+⟨B|U(t)|A⟩ = ∫ Dx(t) · exp(i S[x(t)] / ℏ)
+```
+
+其中 $S$ 是经典作用量。每条路径贡献一个相位 $\exp(iS/\hbar)$。统计场论里把 $i/\hbar$ 替换成 $-1/(k_BT)$（Wick 旋转）就得到虚时路径积分：
+
+```
+Z = ∫ Dφ · exp(-S[φ] / kT)
+```
+
+### 13.1 语言模型的 likelihood 结构上就是路径积分
+
+一个序列 $x = (x_1, \ldots, x_T)$ 的概率：
+
+```python
+# 概念上 model.py:192 在做的事：
+# log p(x) = Σ_t log p(x_t | x_<t)
+```
+
+定义 "作用量" $S(x) = -\sum_t \log p(x_t | x_{<t})$（就是该序列的总 NLL），那么：
+
+```
+p(x) ∝ exp(-S(x))
+```
+
+整个语言模型的边际概率——比如某个特定子串出现的概率——原则上是：
+
+```
+p(s) = Σ_{x ⊃ s}  exp(-S(x))
+```
+
+这就是路径积分的形式。**每条 token 序列是一条路径，作用量是该序列的 NLL，配分函数是在所有可能 token 序列上的求和**（vocab 大小 ^ 序列长度，天文数字）。
+
+### 13.2 generate() 是 Monte Carlo 路径采样
+
+```python
+# model.py:301-308
+probs = F.softmax(logits, dim=-1)
+idx_next = torch.multinomial(probs, num_samples=1)
+...
+idx = torch.cat((idx, idx_next), dim=1)
+```
+
+这个循环每步采一个 token，$T$ 步采出一条完整路径。本质上是**重要性采样**——直接按 $p(x_t|x_{<t})$ 采样而非均匀采，等价于路径积分里的 Metropolis Monte Carlo。物理学家做格点 QCD 每天都在写这种循环。
+
+**Beam search 是另一种近似**——保留 top-k 条作用量最低的路径，与物理学里"WKB 近似 + 鞍点附近的路径"思路同源（鞍点 = 经典路径 = 作用量极值路径 = beam 上的 mode）。Greedy decoding (`top_k=1`) 就是纯经典极限——只走作用量绝对最小的那一条路径。
+
+### 13.3 Diffusion model：直接照搬非平衡态路径积分
+
+Stable Diffusion 那篇开山之作（Sohl-Dickstein 2015）标题就叫 *Deep Unsupervised Learning using Nonequilibrium Thermodynamics*。它的前向过程是 Ornstein-Uhlenbeck SDE，反向过程是逆向 SDE——score-based diffusion 的反向公式
+
+```
+dx = [f(x, t) - g(t)² · ∇_x log p_t(x)] dt + g(t) · dw̄
+```
+
+直接对应 Crooks fluctuation theorem 和 Jarzynski equality 那一套**随机热力学**。物理学家做 nonequilibrium statistical mechanics 的工具箱，不加修改就是 diffusion model 的理论基础。Yang Song 那篇 ICLR 2021 best paper *Score-Based Generative Modeling through SDEs* 几乎可以原样投到 *Phys. Rev. E*。
+
+### 13.4 鞍点近似 = mode collapse 的根源
+
+物理里高维路径积分常用鞍点法：作用量极小处的路径主导贡献。在生成模型里就是"模型坍缩到某些高概率 mode"——多样性丢失。物理学家治这个病的工具（加噪声涨大涨落、调温度抬高 entropy）和 ML 里的解决办法（temperature、top-p、entropy bonus）是同一套。
+
+---
+
+## 14. 微积分原理：autograd 是把 200 多年的数学自动化
+
+Newton 和 Leibniz 1670 年代发明微积分时，给出了人类描述"变化"和"局部线性化"的最强工具。深度学习训练就是这个工具的大规模工业化部署。
+
+### 14.1 链式法则 = 反向传播
+
+链式法则在大一微积分课讲过：$(f \circ g)'(x) = f'(g(x)) \cdot g'(x)$。多元 + 矩阵版本就是雅可比矩阵乘法：
+
+```
+∂L/∂θ = ∂L/∂y_n · ∂y_n/∂y_{n-1} · ... · ∂y_1/∂θ
+```
+
+PyTorch 的整个 autograd 引擎就是把这个公式自动化、向量化。当你写：
+
+```python
+loss.backward()
+```
+
+底下做的是从 `loss` 节点出发沿计算图反向走，每个节点用预定义的 vector-Jacobian product 把梯度一路推回去。物理学家做扰动论写 Feynman 图时也是这种"链式贡献求和"——每条图代表一项贡献，所有图加起来。**Backprop 本质上是一个高度工整的 Feynman 图求和**：每条计算路径都贡献一项 $\partial L / \partial \theta$，全部相加就是总梯度。
+
+### 14.2 梯度下降 = 沿势能面的最速下降
+
+多元微积分告诉我们：$L(\theta)$ 的梯度 $\nabla L$ 指向局部最快上升方向，反向就是最快下降。
+
+```python
+# 训练循环里：
+optimizer.step()    # θ ← θ - lr · ∇L
+```
+
+物理学家会立刻认出这是**最陡下降流（gradient flow）**：
+
+```
+dθ/dt = -∇L(θ)
+```
+
+如果 $L$ 是势能，这描述一个粒子在粘滞流体里滚下势能面。SGD 是这条 ODE 的离散化（Euler 法），加上 mini-batch 噪声就是 Langevin SDE（见第 5 节）。所有这些都是大一物理课内容。
+
+### 14.3 残差连接 = 微分方程的 Euler 步
+
+```python
+# model.py:103-104
+x = x + self.attn(self.ln_1(x))
+x = x + self.mlp(self.ln_2(x))
+```
+
+`x = x + f(x)` 这个结构物理学家一秒识别为 **Euler 法解 $dx/dt = f(x)$ 的一步**。这不是巧合——Neural ODE（Chen 2018）直接把残差网络看作 ODE 的离散化，深度 $L \to \infty$ 时就是连续动力系统。
+
+```python
+# model.py:186-187
+for block in self.transformer.h:
+    x = block(x)
+```
+
+12 个 Block 就是用 12 步 Euler 法积分一个连续 ODE。物理学家做分子动力学每天用 Velocity Verlet 解 $\ddot{x} = F/m$，看到这个循环根本不需要"理解残差网络"——它就是积分一段时间的常微分方程。
+
+### 14.4 Taylor 展开支配着所有的优化器
+
+- **SGD**：用一阶 Taylor。$L(\theta + \Delta) \approx L(\theta) + \nabla L \cdot \Delta$ → 选 $\Delta = -\eta \nabla L$。
+- **Newton 法**：用二阶 Taylor。$L(\theta + \Delta) \approx L(\theta) + \nabla L \cdot \Delta + \tfrac{1}{2} \Delta^T H \Delta$ → 选 $\Delta = -H^{-1} \nabla L$。
+- **Adam / RMSProp**：用一阶梯度的二阶矩做自适应学习率——本质是"用历史梯度的统计估计 Hessian 对角元"。
+
+物理学家做非线性分析（小振动近似、非线性最小二乘、Bogoliubov-de Gennes）就是这套——在某个点把势能 Taylor 展开到二阶，写下**简正模式**（normal modes）。Hessian 谱分析在 ML 里叫"loss landscape geometry"，在物理里叫"小振动谱"，是同一回事。Sharpness、flat minima、edge of stability 这些 ML 里的概念在物理里都有现成的对应：稳定性分析、临界点分类、Lyapunov 指数。
+
+### 14.5 LayerNorm 是个微分几何操作
+
+```python
+# model.py:27-28
+def forward(self, input):
+    return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+```
+
+减均值、除标准差——把激活拉回单位方差的"球面"。这是黎曼几何里"投影到约束流形"的标准操作，做规范场论或约束哈密顿系统的人非常熟悉。它让梯度方向更等向（isotropic），避免某个 dominant direction 拖着整个优化器走——就是物理里的 **normal coordinates**。
+
+### 14.6 Softmax 是 argmax 的可微近似——这个问题微积分早就回答了
+
+```python
+# model.py:301
+probs = F.softmax(logits, dim=-1)
+```
+
+argmax 不可微，所以无法 backprop。Softmax 是它的"光滑化"：当温度 $T \to 0$，softmax → argmax；$T \to \infty$，softmax → 均匀分布。
+
+这套"用可微函数近似不可微操作"是微积分的经典操作（如 Heaviside 阶跃 → sigmoid，绝对值 → Huber loss）。物理学家做相变研究时用 $\tanh$ 近似阶跃、用高斯近似 delta 函数——逻辑完全一样：**让一个不可微的极限过程在每一步都可导**。
+
+`docs/DIFFERENTIABLE_PROGRAMMING.md` 把这个观察推到了底——"深度学习就是可微分编程"，本质上是"把原本的离散程序连续化、把离散判断换成可微的 soft 版本"。
+
+---
+
+## 15. 思想史地图：为什么物理学家转 AI 没有门槛
 
 把上面所有的对应关系放成一张表：
 
@@ -322,8 +609,22 @@ L(N) ∝ N^(-α)
 | 重整化群（粗粒化）| 深度网络层级抽象 | `model.py:186-187` |
 | 对称性 / Noether | 等变网络 / 位置编码破缺 | `model.py:184-185` |
 | 临界现象幂律 | Scaling laws / 涌现能力 | （训练曲线层面）|
+| 力的合成（向量加法）| Token + position embedding 相加 | `model.py:185` |
+| 张量积态空间 | 多头注意力的 reshape | `model.py:54-56` |
+| 统计系综 | Batch 维度并行 | `model.py:179` |
+| Boltzmann 熵 / Shannon 熵 | Cross-entropy / attention entropy | `model.py:192`、`model.py:68` |
+| 自由能的 -TS 项 | RL entropy bonus | （PPO/DPO 训练阶段）|
+| Feynman 路径积分 | 自回归 likelihood / beam search | `model.py:301-308` |
+| 鞍点近似（WKB）| Beam search / greedy decoding | `model.py:301-302` |
+| Wick 旋转 / 非平衡热力学 | Diffusion model 反向 SDE | （扩散模型）|
+| 链式法则（多元微积分）| Backprop / autograd | `loss.backward()` |
+| Gradient flow（最陡下降）| SGD | `optimizer.step()` |
+| Euler 法解 ODE | 残差连接 / Neural ODE | `model.py:103-104` |
+| Taylor 二阶展开 / 简正模式 | Newton 法 / Hessian 分析 | （优化器层面）|
+| 投影到约束流形 / normal coordinates | LayerNorm | `model.py:27-28` |
+| 不可微极限的光滑化 | Softmax ≈ argmax | `model.py:301` |
 
-这张表说明的不是"巧合很多"，而是**深度学习的核心数学语言就是统计物理的数学语言**：能量函数、概率分布、变分原理、对称性、标度律。两个领域处理的"系统"看起来不同——电子自旋 vs token 概率——但描述这些系统的工具是同一套。
+这张表说明的不是"巧合很多"，而是**深度学习的核心数学语言就是统计物理 + 量子力学 + 微积分的数学语言**：能量函数、概率分布、变分原理、对称性、标度律、向量代数、链式法则、ODE 演化。两个领域处理的"系统"看起来不同——电子自旋 vs token 概率——但描述这些系统的工具是同一套。
 
 ### 11.1 研究方法论上的同构
 

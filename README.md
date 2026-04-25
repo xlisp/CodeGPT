@@ -82,7 +82,11 @@ ChatGPT 成功的另外两块关键拼图：
 - **Transformer 自带量子力学结构**：embedding 是 Hilbert 空间态向量、注意力内积是 Born rule 的实数版本、`multinomial` 采样就是测量塌缩
 - **变分原理一以贯之**：从基态能量、ELBO、到 RLHF 的 KL 约束——同一种带约束变分问题
 - **重整化群 = 深度网络的层级抽象**：12 层 Block 沿尺度方向粗粒化；scaling laws 的幂律就是临界点附近的标度行为，"涌现能力"对应相变
-- **思想史地图**：13 行对应表 + 写给打算从物理转 AI 的研究生的方法论建议——你不是在跨界，你在回家
+- **向量化编程是物理学的母语**：力的合成 → `tok_emb + pos_emb`（`model.py:185`）；张量积态空间 → 多头注意力的 reshape（`model.py:54-56`）；GPU SIMD 就是大向量机
+- **熵贯穿训练全流程**：Boltzmann S = k log W 与 Shannon H = -Σp log p 同构；cross-entropy 是熵下降，attention 熵是可解释性指标，RL 的 entropy bonus 就是自由能的 -TS 项
+- **路径积分 = 自回归生成**：序列 likelihood 即 Feynman 求和，beam search 是鞍点近似，diffusion model 直接照搬非平衡热力学
+- **微积分是底层引擎**：backprop = 链式法则的工业化（也是最工整的 Feynman 图求和）；残差连接是 Euler 法解 ODE（`model.py:103-104`）；LayerNorm 是 normal coordinates；softmax 是 argmax 的可微化
+- **思想史地图**：28 行对应表 + 写给打算从物理转 AI 的研究生的方法论建议——你不是在跨界，你在回家
 
 ### [合成数据：怎么把一堆垃圾代码变成高质量训练数据](docs/SYNTHETIC_DATA.md)
 
