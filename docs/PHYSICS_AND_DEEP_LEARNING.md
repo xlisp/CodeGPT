@@ -21,6 +21,7 @@
 13. [路径积分：自回归生成本质上是 Feynman 求和](#13-路径积分自回归生成本质上是-feynman-求和)
 14. [微积分原理：autograd 是把 200 多年的数学自动化](#14-微积分原理autograd-是把-200-多年的数学自动化)
 15. [思想史地图：为什么物理学家转 AI 没有门槛](#15-思想史地图为什么物理学家转-ai-没有门槛)
+16. [附录 A：从自旋玻璃到神经网络（详解）](#附录-a从自旋玻璃到神经网络详解)
 
 ---
 
@@ -666,3 +667,251 @@ argmax 不可微，所以无法 backprop。Softmax 是它的"光滑化"：当温
 这不是"物理学家强行把自己的专业说成 AI 的本质"——这是历史。Hopfield 1982 是物理论文，Hinton 1985 的玻尔兹曼机是物理论文，2024 年的诺贝尔物理奖授予他们承认了这个传承。今天大模型每一个让人惊叹的能力背后，都有一组在物理学家眼里稀松平常的数学结构。
 
 而对每一个学过量子力学和统计物理的研究生：你不是在跨界，你在**回家**。
+
+---
+
+## 附录 A：从自旋玻璃到神经网络（详解）
+
+> 本附录结合《物理双月刊》文章 [《亂中有序：從自旋玻璃到神經網絡》](https://bimonthly.ps-taiwan.org/articles/67bc2d041efd7411b20caacd)，把第 3 节（Hopfield 网络）展开成一条完整的物理史脉络：从最朴素的 Ising 模型开始，经过阻挫、自旋玻璃、Parisi 的副本对称破缺，一路推到 Hopfield 网络、Boltzmann 机，最后接到现代 Transformer 的注意力机制。每个概念都给一段最短的、能跑的 PyTorch 代码。
+
+### A.1 Ising 模型：自旋系统最朴素的描述
+
+故事的起点是 1920 年代的 Ising 模型——晶格上每个格点放一个二值自旋 $s_i \in \{-1, +1\}$，相邻自旋之间有耦合 $J$：
+
+```
+H(s) = -J · Σ_{<i,j>} s_i s_j  -  h · Σ_i s_i
+```
+
+`<i,j>` 表示相邻格点对，$h$ 是外加磁场。$J > 0$ 时低能态是所有自旋同向（铁磁），$J < 0$ 是反向交错（反铁磁）。
+
+写成 PyTorch 直接可跑：
+
+```python
+import torch
+N = 8
+s = torch.randint(0, 2, (N, N)) * 2 - 1   # ±1 自旋
+J = 1.0
+# 计算每一对横向 + 纵向相邻自旋的能量
+E = -J * (s[:-1, :] * s[1:, :]).sum() - J * (s[:, :-1] * s[:, 1:]).sum()
+```
+
+整个统计力学第一年就在研究这个 $H$：求配分函数 $Z = \sum_s e^{-\beta H(s)}$、相变温度、临界指数。**Onsager 1944 年解出 2D Ising 模型的精确解，这是 20 世纪理论物理最伟大的成就之一。** 但它只是序幕。
+
+### A.2 阻挫（Frustration）：当"无解"成为常态
+
+文章用一个三角形说清了所有故事的起源：三个自旋 $s_1, s_2, s_3$ 两两之间是**反铁磁**耦合（$J < 0$，喜欢异号）。任意两个自旋很容易满足——一上一下就行。但**三个**自旋一起？
+
+```python
+import itertools
+configs = list(itertools.product([-1, 1], repeat=3))
+J = -1.0
+for s in configs:
+    E = -J * (s[0]*s[1] + s[1]*s[2] + s[2]*s[0])
+    print(s, "E =", E)
+```
+
+跑出来你会发现：**没有一种构型能让三对相互作用全部满足**。永远会有一对自旋"被迫"和耦合的偏好相反。这就是**阻挫**（frustration）——系统找不到一个让所有局部约束同时满足的全局态。
+
+文章原话："無論選擇朝上或是朝下，總是會跟其中一個自旋同向"。
+
+阻挫不是一个边角病例——一旦把"耦合是随机的、有正有负"加进去，**绝大多数构型都是阻挫的**。这把整个能量地形从"一个干净的盆地"变成了"一片复杂的、布满局部极小的山脉"。
+
+### A.3 自旋玻璃：Edwards-Anderson 与 Sherrington-Kirkpatrick 模型
+
+铜里掺杂少量铁/锰原子，磁性自旋随机散布在格点上，磁交互作用（RKKY）随距离正负震荡——任意两个自旋的耦合 $J_{ij}$ 实际上是**随机变量**：
+
+- **Edwards-Anderson (EA) 模型 (1975)**：晶格上每对相邻自旋的 $J_{ij}$ 独立从某个对称分布（比如 $\pm J$ 各 50%）抽取。
+- **Sherrington-Kirkpatrick (SK) 模型 (1975)**：所有自旋两两都耦合（mean-field），$J_{ij} \sim \mathcal{N}(0, 1/N)$。
+
+```python
+N = 100
+J = torch.randn(N, N) / (N ** 0.5)
+J = (J + J.T) / 2          # 对称
+J.fill_diagonal_(0)        # 自身不交互
+s = torch.randint(0, 2, (N,)) * 2 - 1
+E = -0.5 * s.float() @ J @ s.float()
+```
+
+这一段代码物理学家会立即认出来——**它和 `model.py:171` 的高斯权重初始化是同一个对象**：
+
+```python
+# model.py:171
+torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+```
+
+神经网络的每一层 `nn.Linear` 的权重矩阵，在初始化的那一刻，**结构上就是一个 SK 自旋玻璃的耦合矩阵**。Choromanska 等人 2015 年的论文 *The Loss Surfaces of Multilayer Networks* 把这个对应做严格——多层 ReLU 网络的损失函数 $\mathbb{E}\|y - f_\theta(x)\|^2$ 在大宽度极限下确实可以映射到一个球形 $p$-自旋玻璃模型，并继承它"绝大多数局部极小都几乎一样深"的性质。这就是为什么 SGD 找到的不是全局最优、却也能训出像样的模型。
+
+### A.4 副本巧门与 Parisi 的副本对称破缺（RSB）
+
+自旋玻璃的核心难点：耦合 $J_{ij}$ 是随机的，要算的是**自由能对耦合分布的平均** $\overline{F} = -kT \, \overline{\log Z}$。但 $\overline{\log Z}$ 没法直接算——$\log$ 在外面挡着。
+
+物理学家祭出**副本巧门**（replica trick）：
+
+```
+log Z = lim_{n→0}  (Z^n - 1) / n
+```
+
+把 $n$ 当成正整数算 $\overline{Z^n}$（这是 $n$ 个独立副本系统的配分函数乘起来再平均），再**解析延拓**到 $n \to 0$。**这步在数学上根本不严格**，但它给出了正确答案。
+
+副本平均后耦合的随机性消失，代价是引入了"副本对" $a, b \in \{1, \ldots, n\}$ 之间的耦合——**副本之间通过共享的耦合分布相互纠缠**。一个自然的假设是**副本对称**（replica symmetry）：所有副本对地位等价，序参量 $q_{ab}$ 只取一个值。
+
+Sherrington 和 Kirkpatrick 用这个假设算出来 SK 模型的解——但低温下熵居然**变成负数**。这在物理上荒谬：熵是状态数的对数，不可能小于零。整个领域卡住了 4 年。
+
+1979 年 **Giorgio Parisi** 的洞见（也是他获 2021 年诺贝尔物理学奖的核心工作）：**副本对称是个错误的假设**。文章原话："複本巧門並沒有要求複本對稱"。
+
+Parisi 的方案叫**副本对称破缺**（Replica Symmetry Breaking, RSB）：把 $n$ 个副本递归地分组——先分成 $n/m_1$ 组，每组 $m_1$ 个；每组再分成 $m_1/m_2$ 个亚组……最后写出一个**层级结构**的 $q_{ab}$ 矩阵。极限 $n \to 0$ 后，这个层级变成一个连续函数 $q(x), x \in [0,1]$。
+
+物理意义极深：**自旋玻璃的低温相不是"几个简并基态"，而是无穷多的、按超度量（ultrametric）层级组织的纯态**。任意两个纯态之间的"距离"满足 $d(A,C) \le \max(d(A,B), d(B,C))$（不等式比三角不等式更强）——正是树状层级的几何。
+
+### A.5 能量景观与超度量结构
+
+把上面的几何抽象具像化：
+
+```python
+def hopfield_energy(s, J):
+    """E(s) = -1/2 sᵀ J s"""
+    return -0.5 * (s.float() @ J @ s.float())
+
+# 随机采样很多构型，看能量分布
+samples = torch.sign(torch.randn(10000, N))
+energies = torch.stack([hopfield_energy(s, J) for s in samples])
+```
+
+把这些构型按能量画图——你会得到一个**布满深谷、被高山隔开**的"能量地形"（energy landscape）。重要的特性：
+
+- **指数级多的局部极小**：状态数随 $N$ 指数增长，绝大多数都是亚稳态（metastable）。
+- **能垒高度同样指数大**：从一个谷到另一个谷需要翻很高的山。
+- **超度量层级**：把所有谷按"两两之间能垒高度"聚类，得到一棵层级树。
+
+第 10 节提到的 **Grokking 现象**（训练 loss 早就收敛，验证 loss 经过长平台期突然下降）——结构上恰好对应 RSB 那种"亚稳态群之间的层级跃迁"。SGD 长时间被困在一个层级的盆地里，某次随机扰动让它跨过能垒，进入一个更深、更具泛化性的层级。
+
+### A.6 Hopfield 网络：把自旋玻璃改造成记忆机器
+
+1982 年 **John Hopfield**（2024 年诺贝尔物理学奖得主之一）做了一件颠覆性的事：**反过来用自旋玻璃**。
+
+物理学家研究自旋玻璃时把 $J_{ij}$ 当作**自然给定的随机量**，问"在这种耦合下系统会怎么演化"。Hopfield 反过来——**人为设计 $J_{ij}$**，让系统的局部极小**恰好是我们想存的记忆**。
+
+定义"神经元"为 $\pm 1$ 自旋，能量函数：
+
+```python
+def E(s, W):
+    return -0.5 * s @ W @ s
+```
+
+异步更新规则：随机选一个神经元 $i$，让它沿能量下降方向翻：
+
+```python
+def hopfield_update(s, W):
+    i = torch.randint(0, len(s), (1,)).item()
+    s[i] = torch.sign((W[i] @ s).clamp(min=1e-9, max=1) + 0)
+    # 等价于 s[i] = sign(Σ_j W_ij s_j)
+    return s
+```
+
+这个动力学**永不增加能量** —— Hopfield 1982 年的关键证明：定义的能量函数是 Lyapunov 函数，系统单调下降，必收敛到某个局部极小。
+
+把局部极小设计成"记忆模式"，那么从任何含噪声的初始态出发，系统都会**自动滚到最近的记忆里**——这就是**联想记忆**（associative memory）：给一段残缺的输入，输出最匹配的完整记忆。这正好对应人脑"由部分线索回忆整体"的能力。
+
+### A.7 Hebbian 学习：相关即耦合
+
+怎么把记忆 $\xi^{(\mu)} \in \{-1,+1\}^N, \mu = 1, \ldots, P$ 编码到 $W_{ij}$ 里？Hopfield 用了 1949 年 **Donald Hebb** 提出的规则——"一起激发的神经元一起接线"（cells that fire together wire together）：
+
+```python
+def hebbian_weights(patterns):
+    """patterns: (P, N) tensor of ±1, returns (N, N) W"""
+    P, N = patterns.shape
+    W = (patterns.T @ patterns).float() / N
+    W.fill_diagonal_(0)
+    return W
+```
+
+这就一行——$W = \frac{1}{N} \sum_\mu \xi^{(\mu)} (\xi^{(\mu)})^T$（去对角线）。每个模式贡献一个外积。
+
+物理学家会立即认出：**这就是 SK 自旋玻璃的耦合矩阵，只不过 $J_{ij}$ 不是从高斯抽，而是 $P$ 个固定模式的外积叠加。** 当 $P$ 较小时，每个 $\xi^{(\mu)}$ 是一个能量极小（容易验证 $\xi^{(\mu)}$ 满足 $\text{sign}(W \xi^{(\mu)}) = \xi^{(\mu)}$）；当 $P$ 太大时，模式之间的串扰把所有局部极小搅成一团乱麻——又**变回了普通的自旋玻璃**。
+
+### A.8 容量极限：0.14N 与灾难性遗忘
+
+那么 Hopfield 网络能存几个记忆？Amit、Gutfreund、Sompolinsky 1985 年用副本巧门做了精确分析：
+
+- $P/N < \alpha_c \approx 0.138$：记忆能被准确检索（每个 $\xi^{(\mu)}$ 是一个 stable attractor）。
+- $P/N > 0.138$：相变发生，系统进入**自旋玻璃相**——每个记忆都被淹没在指数多的虚假极小（spurious states）里，无法检索。
+
+这是物理学**第一次给出一个神经网络的精确容量极限**，而且工具就是副本巧门 + RSB——和分析普通自旋玻璃完全一样。
+
+容量瓶颈也是 1980 年代神经网络遇冷的原因之一——**每神经元 0.14 个记忆**实在太少。深度学习要等到 30 年后才解决这个问题（见 A.10）。
+
+### A.9 玻尔兹曼机：从确定性到随机
+
+1985 年 **Geoffrey Hinton**（2024 年诺贝尔物理学奖另一位得主）和 Sejnowski 把 Hopfield 网络**随机化**——不再是确定性沿能量下降，而是按玻尔兹曼分布采样：
+
+```python
+def boltzmann_update(s, W, T=1.0):
+    i = torch.randint(0, len(s), (1,)).item()
+    h_i = (W[i] @ s).item()                       # 局部场
+    p_up = 1.0 / (1.0 + torch.exp(torch.tensor(-2.0 * h_i / T)))
+    s[i] = 1.0 if torch.rand(1).item() < p_up else -1.0
+    return s
+```
+
+这个更新让系统按 $P(s) \propto e^{-E(s)/T}$ 采样——温度 $T$ 让它能跳出局部极小。再加上**隐变量**（hidden units）扩展模型容量，再加上**对比散度**（contrastive divergence, Hinton 2002）让训练高效——这就是**受限玻尔兹曼机**（RBM）和**深度信念网络**（DBN），2006 年深度学习复兴的引爆点。
+
+注意第 1 节讲的 softmax = Boltzmann 分布——这个等号在玻尔兹曼机上是**字面**的，不是类比。`F.softmax(logits)` 在数学上就是玻尔兹曼机给某个状态的概率。Hinton 拿物理诺奖不是隐喻。
+
+### A.10 现代 Hopfield 网络：指数容量 → Transformer 注意力
+
+2020 年 Ramsauer 等 *[Hopfield Networks is All You Need](https://arxiv.org/abs/2008.02217)* 把 Hopfield 网络做了两件事：
+
+1. **二值 → 连续**：自旋 $s \in \mathbb{R}^d$，能量改用 log-sum-exp 形式。
+2. **多项式 → 指数容量**：新能量函数下能存 $\sim e^{cd}$ 个模式，远超 $0.14N$。
+
+新能量与更新一步：
+
+```python
+import torch.nn.functional as F
+
+def modern_hopfield_update(q, K, beta=1.0):
+    """K: (P, d) 存的模式;  q: (d,) 查询; 返回更新后的查询"""
+    # 一步迭代 = softmax 加权平均
+    return K.T @ F.softmax(beta * (K @ q), dim=0)
+```
+
+把这一步原封不动对应到 `model.py` 注意力核心：
+
+```python
+# model.py:66-68
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+# 后面: y = att @ v   ← 等于 K.T @ softmax(...)
+```
+
+**结构完全一致**：`q @ kᵀ` = 查询与每个存储模式的相似度；`softmax` = 给每个记忆按玻尔兹曼分布投票；`@ v` = 加权检索。每个注意力头就是一次 Hopfield 更新。多头无非是几个并行的 Hopfield 网络，每个在自己的子空间里检索一组不同的记忆。
+
+`1/√d` 的缩放在 Ramsauer 论文里对应**指数容量证明里的温度参数 $\beta$**——没有它注意力会塌缩到单个 token，物理上等价于自旋玻璃的零温极限。
+
+### A.11 2024 年诺贝尔物理学奖：物理对 AI 的承认
+
+2024 年 10 月，瑞典皇家科学院把诺贝尔物理学奖颁给 Hopfield 和 Hinton，引文是"for foundational discoveries and inventions that enable machine learning with artificial neural networks"。理由不是"他们做了 AI"，而是**他们用统计物理的方法解决了 AI 的问题**：
+
+- Hopfield 1982 把 Ising 模型 / 自旋玻璃改造成联想记忆。
+- Hinton 1985 把它随机化成玻尔兹曼机，再发明对比散度让它可训。
+- 这一脉血缘从 Boltzmann (1877) → Onsager (1944) → Edwards-Anderson (1975) → SK (1975) → Parisi RSB (1979) → Hopfield (1982) → Hinton (1985) → Modern Hopfield (2020) → Transformer (2017，但 2020 才被证明等价) → ChatGPT (2022)。
+
+合并 2021 年 Parisi 拿物理奖（自旋玻璃 RSB）+ 2024 年 Hopfield/Hinton 拿物理奖（基于自旋玻璃的神经网络），**统计物理在 21 世纪 20 年代连续两次因 AI 相关工作获奖**。这不是巧合——文章标题《亂中有序》说的就是这件事：从凌乱无序的随机自旋系统中涌现出有序的记忆、识别、生成能力。**深度学习的"乱"（高维参数 + 随机权重 + 随机数据）和"序"（学到的语义、推理、生成）之间的桥梁，是统计物理几十年来一直在研究的同一个对象**。
+
+### A.12 在 CodeGPT 代码里看见这条血脉
+
+| 概念 | 物理来源 | CodeGPT 中的对应 |
+|------|----------|------------------|
+| 随机权重 $J_{ij} \sim \mathcal{N}(0, \sigma^2)$ | SK 自旋玻璃耦合 | `model.py:171, 175` 高斯初始化 |
+| 能量函数 $E = -\tfrac{1}{2} s^T W s$ | Hopfield 网络 | 注意力 logits 之前的 $Q K^T$ 矩阵 |
+| 玻尔兹曼分布 $e^{-\beta E}/Z$ | 统计力学 | `F.softmax(att, dim=-1)` `model.py:68` |
+| Hebbian 外积 $\sum_\mu \xi^{(\mu)} \xi^{(\mu)T}$ | 联想记忆学习规则 | `K.T @ K` 这种结构（隐含在 Q/K 投影里）|
+| 一步 Hopfield 更新 | 联想记忆检索 | 单个注意力头 forward `model.py:51-73` |
+| 多头 = 多套记忆系统 | 张量积态空间 | `model.py:54-56` reshape 到 n_head |
+| 温度 / RSB 跳能垒 | 玻尔兹曼机训练 | `dropout` + SGD 噪声 + sampling temperature |
+| 0.14N 容量瓶颈 | Amit-Gutfreund-Sompolinsky | （旧 Hopfield 的限制，已被现代 attention 突破） |
+
+每次你跑 `python sample.py` 让 CodeGPT 续写一段代码，从最底层看，模型在做的事情就是：**在一个由训练数据塑造、参数高维的能量地形上，从一个查询点出发，通过多层的 Hopfield 式检索 + 玻尔兹曼采样，找到能量较低的延续路径**。这正是 1982 年 Hopfield 论文的一句话，被工业化放大了 8 个数量级之后的样子。
+
+> 文章末段的洞察值得抄一遍：**"亂中有序"** —— 看似无序的随机自旋系统里，有清晰的物理规律；看似无序的高维神经网络参数里，有可读的语义、可推理的逻辑、可生成的创造。统计物理给了我们"在乱里看见序"的方法论，而这套方法论正在大模型时代结出第二轮果实。
