@@ -72,6 +72,16 @@ ChatGPT 成功的另外两块关键拼图：
 - **真正的评估方法**：怎么切数据（train / heldout / 无关三段）、三类 metric（正确率 + 引用准确性 + 通用能力回归）、四条 baseline（base / rag / sft / sft+rag），把"哪个更好"变成可复现的实验结论
 - **回到 CodeGPT**：私有代码库场景的具体节奏——先两周搭 RAG，观察短板再决定要不要 continued pretraining
 
+### [GPT 是更高级的"万能谷歌搜索"：从关键词到高维空间的搜索进化史](docs/GPT_AS_SUPER_SEARCH.md)
+
+把 GPT 去神秘化的最直接角度：**它就是搜索引擎的第四代**。从程序员每天用英文报错关键词搜 Stack Overflow，到向量搜索，到 GPT 在 12 层高维空间里反复搜索——本文沿着这条进化线，把"搜索生成"翻译回你已经熟悉的搜索引擎术语，并钉到 `model.py` 的具体行号：
+
+- **四代搜索进化表**：关键词（倒排索引 + TF-IDF）→ 向量搜索（Faiss + 内积）→ 高维空间搜索（contextualized embedding）→ GPT（12 层 × 12 头 = 每生成 1 token 做 144 次高维检索）
+- **Attention = 软 SQL**：`q @ k.T` 是 WHERE，`F.softmax` 是过滤不相关，`@ v` 是加权 SELECT；用户那句"搜索 + 拼接搜索结果 + 过滤不相关 + 在高维空间上完成"的代码版本就是 `model.py:53-70` 那五行
+- **`top_k` / `top_p` 就是搜索引擎的 LIMIT**（`model.py:287-299`）：一个是硬 LIMIT，一个是动态自适应 LIMIT
+- **训练个人 GPT = 在你的语料上重建索引**：`prepare.py` 是建索引，`F.cross_entropy`（`model.py:192`）是让"召回准"的反馈信号，FIM 是给搜索加上"中间填空"维度
+- **把"用好搜索"的肌肉记忆迁移到"用好 GPT"**：贴完整报错而非改写、用英文写 prompt、要 trade-off、要"反直觉"答案——一张迁移表把过去 15 年的搜索技巧全盘对应到 prompt engineering
+
 ### [物理学的影子：量子力学与统计力学如何塑造了深度学习](docs/PHYSICS_AND_DEEP_LEARNING.md)
 
 为什么很多量子力学、统计力学方向的研究生转去做深度学习几乎没有"门槛"？因为他们脑子里的核心工具在大模型里几乎一一对应。本文把这些对应关系一条条钉到 `model.py` 的具体行号上：
