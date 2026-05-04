@@ -16,6 +16,7 @@
 1. [搜索引擎的四代进化](#1-搜索引擎的四代进化)
 2. [第一代：关键词匹配（grep over the internet）](#2-第一代关键词匹配grep-over-the-internet)
 3. [第二代：向量搜索（语义近似）](#3-第二代向量搜索语义近似)
+3.5. [工业级向量搜索：Faiss / HNSW 与近似最近邻（ANN）](#35-工业级向量搜索faiss--hnsw-与近似最近邻ann)
 4. [第三代：高维空间里的搜索（embedding everywhere）](#4-第三代高维空间里的搜索embedding-everywhere)
 5. [第四代：GPT — 在每一层都做一次搜索](#5-第四代gpt--在每一层都做一次搜索)
 6. [Attention 就是"软 SQL"：QK^T 是 WHERE，softmax 是过滤，@V 是 SELECT](#6-attention-就是软-sqlqkt-是-wheresoftmax-是过滤v-是-select)
@@ -24,6 +25,7 @@
 6.7. [多头 = 多个"特征矩阵"：QKV 为什么是 Transformer 成功的核心](#67-多头--多个特征矩阵qkv-为什么是-transformer-成功的核心)
 6.8. [子空间是怎么分离的？SVM 升维 vs Transformer 升维](#68-子空间是怎么分离的svm-升维-vs-transformer-升维)
 6.9. [数据怎么才能分离开？SVD vs 特征矩阵 vs 看标签差异（一个会让 SVD 翻车的例子）](#69-数据怎么才能分离开svd-vs-特征矩阵-vs-看标签差异一个会让-svd-翻车的例子)
+6.10. [从搜索缓存到 KV cache：同一种缓存哲学（含 Ollama / vLLM 原理与 undo 机制）](#610-从搜索缓存到-kv-cache同一种缓存哲学含-ollama--vllm-原理与-undo-机制)
 7. [训练个人 GPT = 在你的语料上重建搜索索引](#7-训练个人-gpt--在你的语料上重建搜索索引)
 8. [实战：把"用好 GPT"翻译成"用好搜索"](#8-实战把用好-gpt-翻译成用好搜索)
 9. [小结：GPT 不神秘，它只是把搜索做到了极致](#9-小结gpt-不神秘它只是把搜索做到了极致)
@@ -106,6 +108,102 @@ tok_emb = self.transformer.wte(idx)   # (B, T, n_embd)
 ```
 
 `wte`（word token embedding）就是一个 `(50304, 768)` 的矩阵。每个 token ID 进来，查出一个 768 维向量——**这就是 token 的语义坐标**。和向量搜索引擎里每篇文档的 embedding 是同一类东西，只是粒度更细：一个 token 一个向量，而不是一段文本一个向量。
+
+---
+
+## 3.5 工业级向量搜索：Faiss / HNSW 与近似最近邻（ANN）
+
+第二代向量搜索的伪代码 `doc_vecs @ q_vec` 看起来很优雅，但**在亿级文档库上跑一次要算 N×d 次乘加**——N=1e9、d=768 时单次查询要 7.6×10¹¹ 次浮点运算，几十秒起步。所以工业界从来不跑朴素内积，而是用 **ANN（Approximate Nearest Neighbor，近似最近邻）**——牺牲一点点召回准确率，把时间复杂度从 O(N) 降到 O(log N) 甚至 O(1)。
+
+ANN 是 RAG、向量数据库（Pinecone / Milvus / Qdrant / Weaviate）、Faiss / HNSWLib 这一整层基础设施的核心。**搞清 ANN，"高维空间搜索"这一代才不悬空。**
+
+### 3.5.1 三类主流 ANN 算法
+
+| 算法 | 核心思想 | 时间复杂度 | 召回率 | 典型实现 |
+|------|----------|------------|--------|----------|
+| LSH (Locality-Sensitive Hashing) | 设计哈希函数让"相近向量大概率落同一桶" | O(1) 平均 | 中 | Faiss `IndexLSH` |
+| IVF (Inverted File) | 先 K-means 把向量聚成 nlist 个 cluster；查询时只搜最近的 nprobe 个 cluster | O(N/nlist · nprobe) | 高（调参后）| Faiss `IndexIVFFlat` |
+| HNSW (Hierarchical Navigable Small World) | 多层跳表 + 小世界图：上层稀疏快速定位、下层稠密精确搜索 | O(log N) | 极高（>0.99）| Faiss `IndexHNSWFlat`、HNSWLib |
+| PQ (Product Quantization) | 把 d 维向量切成 m 段，每段 K-means 量化成 256 个码字——内存压缩 8-32 倍 | 视组合而定 | 中-高 | 常和 IVF 拼成 `IndexIVFPQ` |
+
+**HNSW 是当前事实标准**：召回率高、查询稳定、动态插入友好。理解一个 HNSW 就理解了 95% 的工业向量库。
+
+### 3.5.2 一段能跑的 RAG 检索代码
+
+```python
+# pip install sentence-transformers faiss-cpu
+import numpy as np
+import faiss
+from sentence_transformers import SentenceTransformer
+
+# 1) embedding model：把文本压成 384 维向量
+encoder = SentenceTransformer('all-MiniLM-L6-v2')   # 22M 参数的小模型
+docs = [
+    "Python dict update merges keys in-place",
+    "JS spread operator {...a, ...b} merges objects",
+    "Rust borrow checker prevents data races",
+    "TypeScript generics constrain type parameters",
+    # ... 假装有 1e6 条文档
+]
+doc_vecs = encoder.encode(docs, normalize_embeddings=True)  # (N, 384) float32
+
+# 2) 建 ANN 索引：HNSW
+d = doc_vecs.shape[1]
+index = faiss.IndexHNSWFlat(d, M=32)        # M = 每个节点保留的邻居数
+index.hnsw.efConstruction = 200              # 建图时的搜索宽度（越大越准、越慢）
+index.add(doc_vecs)                          # 插入向量，自动构图
+
+# 3) 查询：把 query 也 encode，再到图里找最近邻
+query = "how do I combine two python dictionaries"
+q_vec = encoder.encode([query], normalize_embeddings=True)
+index.hnsw.efSearch = 64                     # 查询时的搜索宽度
+D, I = index.search(q_vec, k=5)              # D=距离，I=文档下标
+for rank, (dist, doc_id) in enumerate(zip(D[0], I[0])):
+    print(f"#{rank}  dist={dist:.3f}  {docs[doc_id]}")
+```
+
+整条流水线分三步——**encode（升维到 384 维）→ 建索引（在高维空间里搭一张可导航的图）→ search（图上跳几步找邻居）**。这就是"embedding model + ANN"的全部含义。
+
+### 3.5.3 HNSW 在搜什么？——一张图
+
+```
+Layer 2 (稀疏):    A ─────────────── F  ← 长跳：从入口快速跨域
+                   │                 │
+Layer 1 (中层):    A ───── C ─────── F
+                   │       │         │
+Layer 0 (稠密):    A─B─C─D─E─F─G─H─I─J  ← 全量节点 + 短跳精搜
+
+查询路径：从 Layer 2 顶层入口出发 → 贪心走向最近邻 → 下一层继续 → Layer 0 精细搜
+```
+
+**一句话**：HNSW 把"亿级向量的 NN 搜索"变成"在一张多层小世界图上从入口跳到目标"——`O(log N)` 步搞定。和 Google 早年的"先粗排再精排"完全同构，只是粗排/精排都换成了高维向量内积。
+
+### 3.5.4 Embedding model 自己也是个迷你 transformer
+
+注意上面的 `SentenceTransformer('all-MiniLM-L6-v2')`——这就是一个 6 层、384 维的迷你 BERT。它把变长文本压成定长向量的方法是：
+
+```python
+# 伪代码：sentence-transformers 内部
+def encode(text):
+    tok_ids = tokenizer(text)                      # (T,)
+    h = bert_forward(tok_ids)                       # (T, 384)：每个 token 一个向量
+    sentence_vec = mean_pool(h, attention_mask)     # (384,)：mean pooling
+    return F.normalize(sentence_vec, p=2, dim=-1)
+```
+
+**所以现代向量搜索 = 一个小 transformer 当 encoder + ANN 当索引**。两者都是 transformer 时代的产物——上层（GPT）做生成，下层（embedding 模型）做检索。RAG 把两层缝在一起：先用下层的 ANN 召回 top-k，再把 top-k 拼进上层 GPT 的 prompt。
+
+### 3.5.5 ANN 和 attention 是什么关系？
+
+attention 也是"在一堆向量里找最相关的"——但它**不用 ANN**，因为：
+
+- 上下文长度 T 通常 ≤ 几千到几十万，**O(T²) 直接算精确内积比 ANN 还快**——`q @ k.T`（`model.py:66`）就是穷举打分。
+- attention 需要**梯度可导**，ANN 算法（哈希、聚类、图）大多不可微。
+- ANN 是"亿级文档里挑 top-5"，attention 是"几千 token 里软加权所有"——任务粒度不同。
+
+> **分工清楚**：ANN 处理"模型外 / 全网 / 知识库"级别的搜索（RAG 的 retrieval 那一步）；attention 处理"模型内 / 当前上下文"级别的搜索（每次 forward 内部）。两者都在做内积检索，**只是数据库的大小、是否要可微、是精确还是近似不同**。
+
+理解这一层，下一节再讲"GPT 在每一层都做一次搜索"就特别自然——ANN 已经把"高维内积检索"做到了极致工程化，GPT 把同样的操作搬进了网络内部、变成可微的、并且堆了 144 次。
 
 ---
 
@@ -568,6 +666,180 @@ y   = att @ v
 
 ---
 
+## 6.10 从搜索缓存到 KV cache：同一种缓存哲学（含 Ollama / vLLM 原理与 undo 机制）
+
+把 GPT 当搜索引擎看的好处之一是——**搜索引擎所有的缓存技巧，在 GPT 这边都有对应**。
+
+| 搜索引擎一侧 | GPT 一侧 |
+|--------------|----------|
+| Google 把热门 query 的结果缓存起来，第二次同样 query 直接命中 | 自回归生成里前 t-1 个 token 的 K/V 完全相同，缓存即可 |
+| CDN 边缘节点缓存静态结果 | vLLM 的 PagedAttention 把 KV 切成 block 跨请求共享 |
+| 缓存失效 = 撤销缓存条目 | undo / rewind = 丢弃 KV 矩阵尾部若干行 |
+| 多个 user 共享同一份热门页面 | 多 request 共享同一段 system prompt 的 KV（prefix caching）|
+
+所以**KV cache 不是 transformer 时代的新发明，它就是搜索缓存在自回归生成场景下的具体形态**。下面把这层关系说穿。
+
+### 6.10.1 自回归生成的天然冗余
+
+先看一下 CodeGPT 当前的 `generate`（`model.py:275-308`）：
+
+```python
+for _ in range(max_new_tokens):
+    idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+    logits, _ = self(idx_cond)          # ← 每一步都把整个序列从头跑一遍 forward
+    logits = logits[:, -1, :] / temperature
+    # ... 采样 ...
+    idx = torch.cat((idx, idx_next), dim=1)
+```
+
+每生成一个 token，`self(idx_cond)` 会**把已经处理过的所有 token 再算一遍**。第 100 个 token 时，前 99 个 token 在 12 个 Block 里的 K、V 矩阵已经在第 99 步算过了——但代码里没有保存，于是第 100 步重新算了一次。第 101 步又算了一次……
+
+总开销是 **O(T²) 而不是 O(T)**——T 越长越亏。CodeGPT 是教学项目，所以保留了这个最朴素的实现；任何工业部署都不会这样做。
+
+### 6.10.2 KV cache 是什么——一句话定义
+
+> **把每一层每个 head 已经算出来的 K 和 V 矩阵存下来，下一步生成时只算"新 token 那一行"的 K/V，再 append 到缓存末尾。**
+
+attention 那块（`model.py:53-70`）的关键观察是：
+
+```python
+q, k, v = self.c_attn(x).split(self.n_embd, dim=2)   # 每个 token 独立算 Q/K/V
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))   # 因果掩码
+att = F.softmax(att, dim=-1)
+y   = att @ v
+```
+
+因果掩码保证了**第 t 个位置只能看 ≤ t 的 K/V**——也就是说**前面位置的 K/V 不依赖后面位置**。一旦算出来就永远不变。这就是缓存的合法性来源。
+
+带 KV cache 的 generate 伪代码：
+
+```python
+# 伪代码：带 KV cache 的自回归生成
+def generate_with_cache(model, idx, max_new_tokens):
+    # 第一次：处理整个 prompt，所有层的 K/V 都缓存下来
+    kv_cache = [{"k": None, "v": None} for _ in range(model.config.n_layer)]
+    logits = model.forward_with_cache(idx, kv_cache)         # 全量 forward + 写 cache
+
+    for _ in range(max_new_tokens):
+        idx_next = sample(logits[:, -1, :])
+        # 关键：只输入新 token，每层只算一行 K/V，append 到 cache
+        logits = model.forward_with_cache(idx_next, kv_cache)  # 增量 forward
+        idx = torch.cat([idx, idx_next], dim=1)
+    return idx
+```
+
+复杂度从 **O(T²) → O(T)**——每生成一个 token 只做 **O(T)** 的工作（查 cache 算 attention）而不是 O(t²)。
+
+### 6.10.3 KV cache 的内存账
+
+工业部署里 KV cache 通常**比模型权重还占显存**：
+
+```
+KV cache 大小 = 2 × num_layers × num_heads × seq_len × head_dim × dtype_bytes × batch
+                ↑ K 和 V 各一份
+```
+
+代入 Llama-3 70B 的数字：
+
+```
+2 × 80 × 64 × 8192 × 128 × 2 (fp16) × 1 = 21.5 GB    # 单 batch、8K 上下文
+2 × 80 × 64 × 32768 × 128 × 2 (fp16) × 1 = 86 GB     # 32K 上下文，已经爆 80GB H100
+```
+
+**所以推理引擎的核心命题，就是 KV cache 怎么放、怎么省、怎么共享。** 这就把 Ollama 和 vLLM 是干什么的解释干净了。
+
+### 6.10.4 Ollama 的本质：把 KV cache 放进 CPU/GPU 友好的连续内存 + 量化
+
+Ollama 是 [llama.cpp](https://github.com/ggerganov/llama.cpp) 的封装，核心优化全在 KV cache 这一层：
+
+- **GGUF 格式**：把权重和 KV cache 都按"连续内存 + mmap"组织，CPU 推理友好。
+- **KV cache 量化（Q4_K / Q8_0）**：把 fp16 的 K/V 压到 4-bit 或 8-bit 整数，显存直接砍 2-4 倍——精度损失通常 < 1%。
+- **环形 buffer**：上下文超过 `n_ctx` 时滚动覆盖最早的 K/V（牺牲早期记忆换长会话，对应"搜索缓存里 LRU 淘汰"）。
+- **CPU/GPU 混合**：把热的 K/V 放 GPU，冷的放 CPU RAM——和 CDN 边缘节点 vs 中心库的关系一样。
+
+**Ollama 跑得动 70B 模型的关键就在这里**——不是模型小了，是 KV cache 被精打细算地放置/量化了。
+
+### 6.10.5 vLLM 的本质：PagedAttention = 把 KV cache 当虚拟内存分页
+
+vLLM 解决的是**多请求并发**场景下的 KV cache 浪费问题。问题描述：
+
+- 朴素实现给每个 request 预留 `max_seq_len` 那么大的连续 KV 缓冲——但很多 request 实际只生成几百 token，**预留的内存大量空着**。
+- 不同 request 如果共享 system prompt 或 few-shot 例子，**前缀的 KV 完全相同，本来可以共享**。
+
+PagedAttention 借鉴操作系统虚拟内存的做法（[vLLM 论文](https://arxiv.org/abs/2309.06180)）：
+
+```
+传统：一个 request 一段连续 KV cache
+[req-A: ████████████░░░░░░░░░░░] ← 大量预留浪费
+[req-B: ████░░░░░░░░░░░░░░░░░░░]
+[req-C: ██████████████████████░░]
+
+PagedAttention：把 KV cache 切成固定大小 block（比如 16 token 一块），block table 像页表那样映射
+block 池: [B0][B1][B2][B3][B4][B5][B6][B7]...
+req-A 的 page table: B0 → B2 → B5
+req-B 的 page table: B1 → B3
+req-C 的 page table: B0 → B2 → B5 → B6 → B7   ← 前三个 block 和 req-A 共享！
+```
+
+这就让 **prefix caching** 直接成立——多个 request 共用同一段 system prompt 时，那段的 KV block **只算一次、被多个请求引用**。这跟 CDN 把热门页面缓存到边缘节点是同一种思想。
+
+vLLM 把推理吞吐量比朴素实现提高 2-24 倍，几乎全部红利来自这一层 KV cache 复用。
+
+### 6.10.6 回到用户的疑问："这就是搜索文章的缓存吗？"
+
+**是的，本质完全相同**——只是对应物从"网页"换成了"K/V 矩阵的某些行"：
+
+| 维度 | 搜索缓存 | KV cache |
+|------|----------|----------|
+| 缓存键 | query 字符串（或 hash）| 前缀 token 序列 |
+| 缓存值 | 检索结果（doc list）| 每层每头的 K, V 矩阵 |
+| 命中条件 | query 完全相同 | 前缀 token 完全相同（prefix match）|
+| 失效策略 | LRU / TTL | 上下文滑窗 / 显存满了 evict |
+| 跨用户共享 | CDN 边缘共享热门页 | vLLM PagedAttention 共享 prefix block |
+| 数据结构 | 哈希表 / Redis | block table + 物理 block 池 |
+
+**记忆挂钩**：vLLM 之于 Llama，约等于 Cloudflare 之于一个 Web 站点——都是在请求层做缓存复用，把"重复计算的工作量"摊到接近零。
+
+### 6.10.7 Undo 的代价：为什么"原则上 undo 也可以靠 KV cache"
+
+> **用户的原话**："但是没法 undo，原则上 undo 也可以利用 kv cache 的，要有个抛弃回退 kv 矩阵一部分。"
+
+这话点中了一个真实的工程能力——**KV cache 让 undo / rewind / 多分支生成成为 O(1) 而不是 O(T) 的操作**。
+
+每层 cache 的形状是 `(B, n_head, T, head_dim)`，"回退 k 步"的实现就是一次 slicing：
+
+```python
+# 伪代码：回退 k 个 token，让模型从第 (T-k) 位置重新生成
+def rewind(kv_cache, k):
+    for layer_cache in kv_cache:
+        layer_cache["k"] = layer_cache["k"][:, :, :-k, :]   # 丢掉最后 k 行 K
+        layer_cache["v"] = layer_cache["v"][:, :, :-k, :]   # 丢掉最后 k 行 V
+    # idx 也截短到 [:, :-k]
+```
+
+**对比无 cache 的 undo**：得把 idx 截短，然后整个序列从头 forward 一遍——O(T·n_layer) 工作量。
+**有 cache 的 undo**：每层做一次切片，**几乎零成本**，前 (T-k) 个位置的 K/V 完全保留下来继续用。
+
+这就是为什么现代推理引擎能轻松实现下面这些场景：
+
+- **多分支采样 / beam search**：从同一个 prefix 出发探索多条生成路径——前缀 KV 共享，每条分支只 fork 自己的尾部。
+- **Self-consistency / 温度重采样**：发现刚生成的几个 token 不满意，回退几步、换温度再来一遍。CodeGPT 的 REPL（`repl.py`）如果加 KV cache 就能秒级实现"重采样最后一句"。
+- **编辑式 prompt（edit prompt）**：把第 N 个 token 改了，只需丢弃 N 之后的 KV、重算新 token 的 K/V——O(remaining)，不是 O(T)。
+- **agentic 多步推理里的回滚**：tool call 失败、rethink、走另一条路——KV cache 的尾部回退是底层机制。
+
+**所以"GPT 没法 undo" 是错觉**——单纯就 transformer 数学而言，undo 是一个 KV 矩阵切片操作。看起来"没法 undo" 只是因为：
+
+1. 大多数 chat UI 没有把 cache 暴露给用户，回退被实现成"重发对话"。
+2. 远端 API（OpenAI、Anthropic）出于隔离/安全原因不暴露 cache 句柄。
+3. CodeGPT 这种朴素实现根本没有 cache，"undo" 和"重跑"无差别。
+
+**vLLM、SGLang、TensorRT-LLM 这一代推理引擎都把"KV 切片回退"做成了一等公民**——只要你跑的是本地服务，undo 就是 O(1)。
+
+> **一句话总结**：搜索引擎缓存让"重复 query"零成本、缓存淘汰让 undo 自然存在；KV cache 让"重复前缀"零成本、矩阵尾部切片让 undo 自然存在。**同一种缓存哲学，从字符串世界搬到了高维向量世界**——这也是为什么搞 transformer 推理的人和搞 web 缓存的人聊起来毫无门槛。
+
+---
+
 ## 7. 训练个人 GPT = 在你的语料上重建搜索索引
 
 理解了"GPT = 高维空间里的搜索引擎"，训练个人 GPT 这件事就立刻不神秘了：
@@ -635,6 +907,8 @@ y   = att @ v
 3. **会写 prompt**：把"写 prompt"看成"写搜索 query"——具体、贴报错、用英文、给约束、要 trade-off。
 4. **判断什么任务做不到**：搜索引擎查不到没收录过的内容，GPT 也一样。所以才需要 RAG（拼一个外部索引进去）和 SFT（把新内容压进权重）。
 5. **理解多层的意义**：单层 attention 只能做一次平面搜索，12 层让搜索在层次结构上展开——像把"搜文档 → 读文档 → 综合 → 改写"压进一次前向传播。
+6. **看穿推理引擎的优化重点**：Ollama 和 vLLM 干的事和 CDN / Redis 干的事是同构的——KV cache 就是搜索缓存的高维向量版，prefix sharing 就是 CDN 的边缘节点共享，rewind/undo 就是缓存条目的尾部切片。**理解了"GPT 是搜索引擎"，整个推理栈的工程优化你都能秒懂**。
+7. **理解工业向量库**：embedding model + ANN（HNSW / IVF / PQ）就是 attention 的工业化离线版——只是不要梯度、不要可微，换来亿级文档上的 O(log N) 搜索。RAG 的 retrieval 那一层就是这个东西，它和 GPT 内部 attention 的关系是分工而不是替代。
 
 ---
 
