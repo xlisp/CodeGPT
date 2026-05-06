@@ -17,6 +17,7 @@
 2. [第一代：关键词匹配（grep over the internet）](#2-第一代关键词匹配grep-over-the-internet)
 3. [第二代：向量搜索（语义近似）](#3-第二代向量搜索语义近似)
 3.5. [工业级向量搜索：Faiss / HNSW 与近似最近邻（ANN）](#35-工业级向量搜索faiss--hnsw-与近似最近邻ann)
+3.6. [搜索 → 推荐 → GPT：协同矩阵把"含义"一步步藏进黑箱](#36-搜索--推荐--gpt协同矩阵把含义一步步藏进黑箱)
 4. [第三代：高维空间里的搜索（embedding everywhere）](#4-第三代高维空间里的搜索embedding-everywhere)
 5. [第四代：GPT — 在每一层都做一次搜索](#5-第四代gpt--在每一层都做一次搜索)
 6. [Attention 就是"软 SQL"：QK^T 是 WHERE，softmax 是过滤，@V 是 SELECT](#6-attention-就是软-sqlqkt-是-wheresoftmax-是过滤v-是-select)
@@ -204,6 +205,193 @@ attention 也是"在一堆向量里找最相关的"——但它**不用 ANN**，
 > **分工清楚**：ANN 处理"模型外 / 全网 / 知识库"级别的搜索（RAG 的 retrieval 那一步）；attention 处理"模型内 / 当前上下文"级别的搜索（每次 forward 内部）。两者都在做内积检索，**只是数据库的大小、是否要可微、是精确还是近似不同**。
 
 理解这一层，下一节再讲"GPT 在每一层都做一次搜索"就特别自然——ANN 已经把"高维内积检索"做到了极致工程化，GPT 把同样的操作搬进了网络内部、变成可微的、并且堆了 144 次。
+
+---
+
+## 3.6 搜索 → 推荐 → GPT：协同矩阵把"含义"一步步藏进黑箱
+
+到这里我们看到了"向量搜索"的工业实现，但**为什么人类会相信"几百维的浮点向量能代表一段文本/一首歌/一个人"**？这个信念不是 GPT 时代才长出来的——它来自**推荐系统**这条平行支线。从 2006 年 Netflix Prize 开始，推荐系统已经把"矩阵 + 内积"这套范式打磨了十几年，**GPT 只是把这条路走到了极致**。
+
+把搜索、推荐、GPT 三件事并排看，就能看清"矩阵的可解释性是怎么一步步消失的"——以及为什么这种"消失"反而是泛化能力的来源。
+
+### 3.6.1 起点：可解释的特征矩阵
+
+最朴素的做法——给每个用户写一行明确含义的特征：
+
+```python
+# 显式特征矩阵：每一列都有名字
+#                gender  age  income  is_student  likes_action  likes_romance
+user_features = [
+    [1.0,        25,   30000,    0,           1,             0],   # Alice
+    [0.0,        38,   80000,    0,           0,             1],   # Bob
+    [1.0,        20,    5000,    1,           1,             1],   # Cindy
+]
+```
+
+**每一维都对应一个真实概念**——你拿出第 4 列就是 income，第 5 列就是 likes_action。这是传统机器学习/数据库里的特征工程：人类先决定"什么维度有用"，模型只负责把它们组合成预测。
+
+**问题**：你永远写不全。"她其实喜欢有动作场面但又文艺一点的电影"——这种维度你没有列。所有显式特征矩阵都漏在这里。
+
+### 3.6.2 协同过滤：不写特征，只写"谁喜欢谁"
+
+Netflix Prize（2006-2009）开启了另一条路。**完全不问**"用户是什么样的人"或"电影是什么类型"——只看一张稀疏评分表 R：
+
+```
+        Movie₁  Movie₂  Movie₃  Movie₄  ...  Movie_N
+User₁:    5      ?      3      ?     ...    ?
+User₂:    ?      4      ?      2     ...    5
+User₃:    1      ?      ?      4     ...    ?
+...
+User_M:   ?      3      5      ?     ...    ?
+```
+
+R 是一个 (M, N) 的矩阵，绝大多数格子是缺失的。**任务**：把缺失的格子补出来——"User₁ 会给 Movie₂ 打多少分？"
+
+注意这里**已经放弃了"特征"的概念**：不再有 gender、age、likes_action——只有"用户 u 给物品 i 打了分 r"这种纯关系数据。
+
+### 3.6.3 矩阵分解（MF）：把 R 拆成两个隐向量矩阵
+
+关键洞见：**R ≈ U Vᵀ**，其中
+
+- **U: (M, k)** — 每个用户一个 k 维隐向量（k 远小于 N，比如 k=64）
+- **V: (N, k)** — 每部电影一个 k 维隐向量
+
+预测 User_u 对 Movie_i 的评分就是**两个向量的内积**：`r̂[u, i] = U[u] · V[i]`。
+
+```python
+# 矩阵分解 = 两个 nn.Embedding + 一次内积
+import torch, torch.nn as nn, torch.nn.functional as F
+
+class MF(nn.Module):
+    def __init__(self, n_users, n_items, k=64):
+        super().__init__()
+        self.U = nn.Embedding(n_users, k)        # 用户隐向量矩阵
+        self.V = nn.Embedding(n_items, k)        # 物品隐向量矩阵
+    def forward(self, u, i):
+        return (self.U(u) * self.V(i)).sum(-1)   # 内积 = 预测评分
+
+# 训练目标：让内积接近真实评分
+loss = F.mse_loss(model(u, i), rating)
+```
+
+**这就是 GPT embedding 的祖先**。和 `model.py:147` 的 `wte = nn.Embedding(vocab_size, n_embd)` 是同一个 API、同一种数学。
+
+但这一步有一个深刻的代价：**U[u] 这 64 维数字不再有名字**。你拿出第 7 维不是 income 也不是 age——它是"梯度下降为了让所有内积尽量贴近真实评分而自动找到的某个抽象方向"。事后做主成分分析，你**有时候**能解读出"这一维像是动作 vs 文艺、那一维像是高雅 vs 爆米花"——但大部分维度无法命名。
+
+> **第一次"含义消失"**：从"显式特征矩阵 → 隐向量矩阵"。维度数量大幅压缩（N=10000 → k=64），换来的是泛化（能预测任何 user-item 对），代价是可解释性。这是机器学习从"特征工程"走向"表征学习"的第一个分水岭。
+
+### 3.6.4 概率视角：从"评分回归"到"喜欢的条件概率"
+
+下一步是把"评分回归"换成"概率分布"。BPR (Bayesian Personalized Ranking)、NCF (Neural Collaborative Filtering) 等方法把内积喂进 sigmoid 或 softmax：
+
+```python
+# 用户 u 在 N 个 item 上的概率分布
+logits = U[u] @ V.T              # (N,)：一次性算出对所有 item 的内积分数
+probs  = F.softmax(logits, -1)   # 归一化为"喜欢每个 item 的概率"
+```
+
+**到这里数学已经和 GPT 完全一样了**——只是把 "user / item" 换成 "context / next token"，把"评分"换成"下一个 token 的概率"。看 `model.py:191`：
+
+```python
+logits = self.lm_head(x)        # x: (B, T, n_embd), lm_head.weight: (vocab, n_embd)
+                                 # 等价于 x @ lm_head.weight.T → (B, T, vocab)
+```
+
+这一行就是 `context_vector @ token_matrix.T`——和推荐里的 `U[u] @ V.T` 是**同一个内积**。
+
+更巧的是，CodeGPT 在 `model.py:153` 把 `wte.weight` 和 `lm_head.weight` 绑成同一份：
+
+```python
+self.transformer.wte.weight = self.lm_head.weight   # weight tying
+```
+
+这等价于推荐里"用户矩阵和物品矩阵共享一份"——token 既是被搜索的 item（`wte` 把 token id 映成向量），也是搜索回答时的候选库（`lm_head` 把上下文向量打分到所有 token）。**weight tying 是矩阵分解里"对称协同过滤"在 GPT 里的最自然形态**。
+
+### 3.6.5 word2vec：矩阵分解走进语言
+
+2013 年的 word2vec 把 MF 直接搬到了语言上：
+
+- **R 矩阵** = (中心词, 上下文词) 的共现矩阵（或 PMI 矩阵）
+- **U** = word embedding，**V** = context embedding
+- **目标** = 预测某个词周围会出现什么词（softmax over vocab）
+
+word2vec 论文（Levy & Goldberg 2014）证明了 skip-gram + negative sampling 在数学上等价于对 PMI 矩阵做隐式分解。**所以 word embedding 本质上就是"把词当 user、把上下文词当 item"的协同过滤**——一个词"喜欢"哪些上下文，等于它在那些上下文窗口里频繁共现。
+
+这一步把"推荐里的隐向量"和"语言里的语义向量"接上了——两者从此是同一个东西。
+
+### 3.6.6 GPT：把这件事做到 144 层
+
+GPT 把"矩阵分解 + 内积"这套机制堆叠到了极致。把推荐系统里的角色对应到 `model.py` 里的对象：
+
+| 在 GPT 里的位置 | 对应推荐里的什么 |
+|-----------------|------------------|
+| `wte: (50304, 768)` | 物品 latent 矩阵 V（每个 token 一个向量） |
+| 第 t 个位置的隐状态 `x[:, t, :]` | 用户 latent 向量 U[u]——但**它是当前上下文动态生成的**，不是查表查出来的静态用户 |
+| `logits = x @ wte.T` | 内积打分 = 这段上下文对每个候选 token 的"喜爱程度" |
+| `softmax(logits)` | 下一个 token 的概率分布 |
+| 12 层 × 12 头的 K / Q / V 投影矩阵 | 多组"特征矩阵"（参考 §6.7）——但每一维都不可解释 |
+
+最大的差别在中间那一行：**推荐里 U[u] 是一个静态向量（用户是固定的），GPT 里 U 是上下文动态算出来的**。每多读一个 token，"用户向量"就被 attention 重新计算一次——所以同一个用户问"recommend me a movie"和"我刚看了《肖申克的救赎》，再来一部"会得到完全不同的 U，召回完全不同的"电影"。
+
+**这就是 GPT 之于推荐系统的飞跃**：用户画像不再是矩阵里的某一行，而是**每次输入即时由 attention 生成的高维向量**——而 attention 本身又是通过 144 次 QK 内积检索拼出来的（§6.7）。从一次内积到 145 次内积，从静态用户到动态用户——但底层操作没变。
+
+### 3.6.7 三个时代的"矩阵 + 概率"对比
+
+| 时代 | 关键矩阵 | 维度有含义吗 | 训练信号 | 概率怎么来的 |
+|------|----------|--------------|----------|--------------|
+| 特征工程 | user feature matrix（手写） | **完全有**：gender / age / income 等 | 监督标签 | 逻辑回归 / 朴素贝叶斯手算条件概率 |
+| 协同过滤 MF | U: (M, k), V: (N, k) | **几乎没有**：k 维隐向量自动学出 | 评分 MSE / BPR pairwise | `sigmoid(U[u] · V[i])` |
+| word2vec | word embedding: (vocab, d) | **完全没有**：d 维分布式表示 | 周围词预测 + negative sampling | `softmax over vocab` |
+| GPT | `wte` + 144 个 K / Q / V 投影矩阵 | **完全没有** + 上下文动态生成 | next-token cross-entropy（`model.py:192`）| `softmax(x @ wte.T)` |
+
+**一条主线**：每往后一步——
+
+1. **矩阵更大**：M×k → vocab×d → 144 套 (n_embd, n_embd) 投影。
+2. **含义更模糊**：人能命名的列 → 部分能解释的隐维 → 完全黑箱。
+3. **损失更间接**：直接监督评分 → 拟合共现 → 拟合 next-token。
+4. **概率分布更宽**：5 个评分等级 → 几万词 → 5 万 token，每一步都给完整分布。
+
+**但底层操作始终是同一件事——内积 + softmax**。从"猜 5 部电影评分"到"在 50304 个 token 上给完整概率分布"，本质都是：**学一组隐向量，让内积 + softmax 拟合观测到的共现/偏好**。
+
+> **第二次"含义消失"**：从协同过滤的 64 维到 GPT 的 768 维 + 144 套投影。维度多得无法逐个解释，但正因如此模型能同时建模语法、语义、风格、跨语言对齐、算法骨架等无数个我们叫不出名字的子结构（§6.7）。**可解释性的丧失是泛化能力的代价，也是它的来源**。
+
+### 3.6.8 工业推荐的"召回 + 精排"和 GPT 的"top-k + softmax"是同构的
+
+这条联系还有一个工程层面的体现。现代推荐系统的两阶段：
+
+```
+亿级物品池
+   ↓  Recall（召回）：用 ANN 在 item embedding 库里找 top-1000   ← §3.5 的 HNSW
+top-1000 候选
+   ↓  Rank（精排）：用一个小 DNN 对 1000 个 item 重新打分
+top-10
+   ↓  Re-rank（重排）：业务规则、多样性、新鲜度过滤
+最终展示
+```
+
+再看 GPT 生成一个 token 的对应阶段（`model.py:287-303`）：
+
+```python
+# "全量打分"：lm_head 给所有 50304 个 token 打分（vocab 不大，直接穷举内积）
+logits = self.lm_head(x[:, [-1], :])
+
+# "精排"：top-k 截断
+v, _ = torch.topk(logits, top_k)
+logits[logits < v[:, [-1]]] = -float('Inf')
+# 或：top-p（nucleus）累积概率截断
+
+# "采样"：softmax 后随机抽
+probs = F.softmax(logits, -1)
+idx_next = torch.multinomial(probs, 1)
+```
+
+**结构完全同构**——只是 GPT 里 vocab 才 5 万级、可以直接穷举内积；工业推荐 item 上亿，必须用 ANN 先召回。两边都在做"内积打分 → 截断 → 概率分布 → 采样"。
+
+> 这也解释了为什么"用 GPT 做推荐"在 2024 年成了工业新方向（生成式推荐 / Generative Recommender）——**这两件事本来就是同一种数学**，把 item 当 token、把用户历史当 prompt，GPT 直接就能做推荐。区别只是 token 词表不再是自然语言，而是 item id。
+
+### 3.6.9 一句话收拢
+
+> **从搜索到推荐到 GPT，一条线索贯穿始终——矩阵越变越大、维度越变越无法命名、损失函数越变越间接，但底层操作始终是"内积 + softmax"。** 理解了协同过滤里那个简单的 `(U[u] * V[i]).sum(-1)`，你就理解了 GPT 输出层那个 `x @ wte.T` 的全部精神先驱。GPT 不是另一种数学，它是同一个数学被推到了极致——**把一份显式可解释的人造特征矩阵，换成了 144 套梯度下降自己长出来的隐特征矩阵**。
 
 ---
 
