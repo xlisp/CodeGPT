@@ -113,6 +113,16 @@ ChatGPT 成功的另外两块关键拼图：
 - **CodeGPT 的三明治结构**：符号层（`<|fim_*|>` 模板 + `stop_tokens`）+ 概率层（`F.softmax` → `multinomial`，`model.py:301-302`）+ 神经层（12×Block, 124M 权重）。任何能跑的大模型系统都是这种夹心——纯神经搞不定"什么时候停止生成"
 - **现代系统都是神经-符号混合**：tool calling、verifier-based RL（o1/R1）、RAG、Lean+LLM——三派各自占据自己擅长的层，而不是某一派胜出
 
+### [从代码语义搜索到 GPT 写代码：四代范式与三次关键转变](docs/CODE_SEARCH_TO_GPT.md)
+
+回答"程序员想要一段代码这件事三十年里发生了什么"——把 grep / Word2Vec / Seq2Seq / GPT 排成同一条进化线，并用本仓库 `model.py` / `tokenizer.py` 的具体行号 + 一段可跑的迷你 seq2seq demo（**只依赖项目已有的 `torch` / `tiktoken`**），把每一次转变讲到代码层：
+
+- **四代总览表**：grep（字符串）→ Word2Vec/code2vec（向量内积）→ Seq2Seq（encoder-decoder 自回归生成）→ GPT（decoder-only + 自监督）
+- **可运行 Seq2Seq demo**：100 行 PyTorch 实现 LSTM Encoder + Bahdanau Attention + LSTM Decoder，用 `(注释, 代码)` 配对训练，CPU 上 30s 跑完看效果——**Bahdanau attention 那几行就是 `model.py:66-70` 自注意力的祖先**
+- **三次关键性质变**：① 离散符号 → 连续向量（相似度从 `==` 变成 `q @ V.T`）；② 检索 → 生成（输出从"库里找"变成"自回归采样"）；③ **配对监督 → 自监督序列**（数据规模 1e6 → 1e10+ token，是 scaling laws 的真正源头）
+- **每一次转变都把"人要做的事"吸收进模型**：人想关键词 → 人想 query → 人标 `(comment, code)` 对子 → 模型从 GitHub 自己读出来
+- **CodeGPT 的位置**：`wte = nn.Embedding(50304, 768)`（`model.py:183`）就是 Word2Vec 的端到端版；`apply_fim_transform` + `<|fim_*|>` 是把 seq2seq 的"中间填空"再次自监督化——**GPT 没有否定前几代，而是把它们压成了自己的第一层**
+
 ### [合成数据：怎么把一堆垃圾代码变成高质量训练数据](docs/SYNTHETIC_DATA.md)
 
 回答"Claude 怎么把垃圾代码变废为宝"这个实战问题。把"合成数据"从一项模糊的技术拆成一条有具体工具链的流水线：
@@ -160,6 +170,7 @@ CodeGPT/
     ├── SFT_RL_INFERENCE_MECHANICS.md       # 训练写权重，推理用权重 + 脚手架：SFT/RL 如何在使用时生效
     ├── RAG_VS_SFT.md                       # RAG 还是 SFT：私有数据的选型与评估方法
     ├── SYNTHETIC_DATA.md                   # 合成数据：垃圾代码变废为宝的六环节流水线
+    ├── CODE_SEARCH_TO_GPT.md               # 从代码语义搜索到 GPT 写代码：四代范式与三次关键转变（含可跑 seq2seq demo）
     ├── SYMBOLIC_BAYES_NEURAL.md            # 符号主义、贝叶斯网络、深度学习：三种 AI 范式对比
     └── PHYSICS_AND_DEEP_LEARNING.md        # 物理学的影子：量子力学与统计力学如何塑造了深度学习
 ```
