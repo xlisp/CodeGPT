@@ -113,15 +113,17 @@ ChatGPT 成功的另外两块关键拼图：
 - **CodeGPT 的三明治结构**：符号层（`<|fim_*|>` 模板 + `stop_tokens`）+ 概率层（`F.softmax` → `multinomial`，`model.py:301-302`）+ 神经层（12×Block, 124M 权重）。任何能跑的大模型系统都是这种夹心——纯神经搞不定"什么时候停止生成"
 - **现代系统都是神经-符号混合**：tool calling、verifier-based RL（o1/R1）、RAG、Lean+LLM——三派各自占据自己擅长的层，而不是某一派胜出
 
-### [从代码语义搜索到 GPT 写代码：四代范式与三次关键转变](docs/CODE_SEARCH_TO_GPT.md)
+### [从代码语义搜索到 GPT 写代码：五代范式、三次质变与一条贯穿始终的"搜索维度提升"主线](docs/CODE_SEARCH_TO_GPT.md)
 
-回答"程序员想要一段代码这件事三十年里发生了什么"——把 grep / Word2Vec / Seq2Seq / GPT 排成同一条进化线，并用本仓库 `model.py` / `tokenizer.py` 的具体行号 + 一段可跑的迷你 seq2seq demo（**只依赖项目已有的 `torch` / `tiktoken`**），把每一次转变讲到代码层：
+回答"程序员想要一段代码这件事三十年里发生了什么"——把 grep / Sourcegraph / Word2Vec / Seq2Seq / GPT 排成同一条进化线，**主线是"搜索空间维度的持续提升"**，并用本仓库 `model.py` / `tokenizer.py` 的具体行号 + 一段可跑的迷你 seq2seq demo（**只依赖项目已有的 `torch` / `tiktoken`**），把每一次转变讲到代码层：
 
-- **四代总览表**：grep（字符串）→ Word2Vec/code2vec（向量内积）→ Seq2Seq（encoder-decoder 自回归生成）→ GPT（decoder-only + 自监督）
+- **五代总览表（按搜索空间维度排列）**：grep（1 维字符串）→ Sourcegraph / LSIF / CodeQL / Joern（多维离散结构图：AST + 引用 + CFG + DFG）→ Word2Vec / code2vec（连续 $\mathbb{R}^d$）→ Seq2Seq（+ 时间维 T）→ GPT（+ 深度 L + 多头 H，**每生成 1 token = 144 次高维检索**）
+- **第二代专章 Sourcegraph / CodeQL / Joern**：本质是"静态分析升维 + 高维空间索引 + 图查询"——CodeQL 用 Datalog 在数据流图上做污点分析，Joern 用 Cypher 在 Code Property Graph 上找可达性。这一代仍然是搜索，但已经能**精确**回答"语义相同但字面不同"的查询；天花板是**仍然不会写代码**
 - **可运行 Seq2Seq demo**：100 行 PyTorch 实现 LSTM Encoder + Bahdanau Attention + LSTM Decoder，用 `(注释, 代码)` 配对训练，CPU 上 30s 跑完看效果——**Bahdanau attention 那几行就是 `model.py:66-70` 自注意力的祖先**
-- **三次关键性质变**：① 离散符号 → 连续向量（相似度从 `==` 变成 `q @ V.T`）；② 检索 → 生成（输出从"库里找"变成"自回归采样"）；③ **配对监督 → 自监督序列**（数据规模 1e6 → 1e10+ token，是 scaling laws 的真正源头）
-- **每一次转变都把"人要做的事"吸收进模型**：人想关键词 → 人想 query → 人标 `(comment, code)` 对子 → 模型从 GitHub 自己读出来
-- **CodeGPT 的位置**：`wte = nn.Embedding(50304, 768)`（`model.py:183`）就是 Word2Vec 的端到端版；`apply_fim_transform` + `<|fim_*|>` 是把 seq2seq 的"中间填空"再次自监督化——**GPT 没有否定前几代，而是把它们压成了自己的第一层**
+- **统一伪代码视角（§8）**：五代搜索全部统一为 `top_k(space, key=metric)`，区别只在 `space` 和 `metric` 的维度——`re.search` / `scip_index.edges_to` / `q @ V.T` / `softmax(score) @ enc_h` / `model.py:66-70` 是同一种操作的不同投影
+- **三次关键性质变（在维度图上就是三次维度跃迁）**：① 离散结构 → 连续向量（第二代 → 第三代，第一次有了"插值"）；② 检索 → 生成（加时间维 T，第一次能写库里没有的代码）；③ 配对监督 → 自监督序列（加深度 L 和多头 H，数据规模 1e6 → 1e10+ token）
+- **RAG = 维度回收**：Sourcegraph 的图搜索 + 向量搜索 + GPT 是工业级最优组合——三代搜索叠加，各自占据自己最擅长的维度
+- **CodeGPT 的位置**：`wte = nn.Embedding(50304, 768)`（`model.py:183`）就是 Word2Vec 的端到端版；attention 里的 `q @ k.T` 同时是第二代图搜索、第三代向量内积、第四代 Bahdanau attention 的统一推广；`apply_fim_transform` + `<|fim_*|>` 把 seq2seq 的"中间填空"再次自监督化——**GPT 是前四代的叠加态，不是替代品**
 
 ### [合成数据：怎么把一堆垃圾代码变成高质量训练数据](docs/SYNTHETIC_DATA.md)
 
@@ -170,7 +172,7 @@ CodeGPT/
     ├── SFT_RL_INFERENCE_MECHANICS.md       # 训练写权重，推理用权重 + 脚手架：SFT/RL 如何在使用时生效
     ├── RAG_VS_SFT.md                       # RAG 还是 SFT：私有数据的选型与评估方法
     ├── SYNTHETIC_DATA.md                   # 合成数据：垃圾代码变废为宝的六环节流水线
-    ├── CODE_SEARCH_TO_GPT.md               # 从代码语义搜索到 GPT 写代码：四代范式与三次关键转变（含可跑 seq2seq demo）
+    ├── CODE_SEARCH_TO_GPT.md               # 从代码语义搜索到 GPT 写代码：五代范式（grep/Sourcegraph/Word2Vec/Seq2Seq/GPT）+ 搜索维度提升主线 + 可跑 seq2seq demo
     ├── SYMBOLIC_BAYES_NEURAL.md            # 符号主义、贝叶斯网络、深度学习：三种 AI 范式对比
     └── PHYSICS_AND_DEEP_LEARNING.md        # 物理学的影子：量子力学与统计力学如何塑造了深度学习
 ```
