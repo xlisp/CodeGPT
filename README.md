@@ -34,6 +34,17 @@ ChatGPT 成功的另外两块关键拼图：
 - **柏拉图表征假说**："盲人摸象"的终局——不同模型从不同维度观察现实，但内部表征趋向收敛。多头注意力是模型内部的 12 个"盲人"，多语言训练让 Python/JS/Rust 收敛到同一个"算法理想型"
 - **CodeGPT 在这个图景中的位置**：已实现预训练 + 推理时弱对齐（temperature/top-p），未来可扩展 SFT + DPO
 
+### [万能函数模拟器：大模型就是用微积分从数据里"积分"出来的函数 P](docs/UNIVERSAL_FUNCTION_APPROXIMATOR.md)
+
+把大模型化简到一句话："用微积分（可微分编程）从海量离散文本数据里反推出来的函数 $P(y \mid x)$"。从通用近似定理出发，把"为什么能模拟任何函数"、"为什么必须是微积分"、"离散文本怎么被函数捕获"、"矩阵和概率分别充当什么角色"四件事钉到 `model.py` 的具体行号上：
+
+- **万能函数模拟器（Universal Function Simulator）**：单隐层 MLP 就能逼近任意连续函数(Cybenko/Hornik 1989)——50 行代码拟合 $\sin(3x) + 0.3\cos(7x)$ 让你亲眼看见。但定理只说"存在",没说"找得到"——这就是为什么必须配上微积分
+- **三个"反推原函数"的并列结构**：行星轨道(牛顿 + $F=ma$)、明天天气(Navier-Stokes + 数值积分)、下一个 token($P^*(y \mid x)$ + cross-entropy + SGD)——结构完全一致,只是反推对象不同。**SGD 就是大模型时代的"数值积分"**
+- **离散文本 → 连续可微问题的三层翻译**:离散选择 → 概率分布(连续单纯形)、离散 id → 连续向量(embedding)、找最优 token → 找最优分布(连续优化)。**离散性只出现在两头,中间留出一条完全可微的管道**
+- **矩阵 = 万能函数模拟器的天然零件**:一行 `nn.Linear(768, 3072)` 就是 200 万个可调旋钮;矩阵 + 非线性 = 通用近似;深度 = 用层数换宽度。一张表把 CodeGPT 的 80 个 `nn.Linear` 全部列出来,加起来 124M 参数
+- **反推机器三件套**:cross-entropy(衡量距离)+ autograd(链式法则反推梯度)+ SGD(沿反方向走一步)——124M 维参数空间里"积分"出一条训练 trajectory
+- **万能函数 P 的边界**:能做"统计 + 插值",做不到"精确算术 + 形式逻辑 + 训练分布外外推"。所以现代 LLM 都是 "$P_\theta$ + 符号脚手架" 的混合架构;扩展这些边界(tool use/MoE/long-context/test-time compute)就是研究前沿
+
 ### [深度学习是可微分编程：从 y = wx + b 讲到 CodeGPT](docs/DIFFERENTIABLE_PROGRAMMING.md)
 
 解读 LeCun "Deep Learning est mort. Vive Differentiable Programming!" 背后的架构视角：
@@ -167,6 +178,7 @@ CodeGPT/
     ├── DEEP_DIVE.md                        # 从 RNN 到 CodeGPT 的完整进化史
     ├── COMPRESSION_IS_INTELLIGENCE.md      # 压缩即智能的认知哲学
     ├── RLHF_AND_PLATONIC_REPRESENTATION.md # RLHF 对齐与柏拉图表征
+    ├── UNIVERSAL_FUNCTION_APPROXIMATOR.md  # 万能函数模拟器：用微积分从数据里反推出函数 P
     ├── DIFFERENTIABLE_PROGRAMMING.md       # 深度学习是可微分编程：从线性方程到大模型
     ├── SFT_FORGETTING_AND_MOE.md           # 多次 SFT 的灾难性遗忘与 MoE 的本质
     ├── SFT_RL_INFERENCE_MECHANICS.md       # 训练写权重，推理用权重 + 脚手架：SFT/RL 如何在使用时生效
