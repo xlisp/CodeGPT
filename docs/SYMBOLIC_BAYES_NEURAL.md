@@ -19,8 +19,9 @@
 7. ["训练数据 = 一堆可执行的符号代码"——这个类比对在哪、错在哪](#7-训练数据--一堆可执行的符号代码这个类比对在哪错在哪)
 8. [三种范式的对照表](#8-三种范式的对照表)
 9. [在 CodeGPT 里看见三个范式的影子](#9-在-codegpt-里看见三个范式的影子)
-10. [神经-符号混合：现代系统都不是纯种](#10-神经-符号混合现代系统都不是纯种)
-11. [给用户原问题的最终回答](#11-给用户原问题的最终回答)
+10. [函数式编程视角：神经网络是 f∘g∘h∘... 的世界](#10-函数式编程视角神经网络是-fgh-的世界)
+11. [神经-符号混合：现代系统都不是纯种](#11-神经-符号混合现代系统都不是纯种)
+12. [给用户原问题的最终回答](#12-给用户原问题的最终回答)
 
 ---
 
@@ -403,7 +404,7 @@ SAE 的 feature 给开发者看是金矿,给用户看就是天书。**"可解释
 
 现在回到你的原问题。让我们逐条拆。
 
-### 6.1 对的部分（70%）
+### 7.1 对的部分（70%）
 
 **类比的核心直觉是正确的：训练数据确实定义了系统的行为，正如代码定义了程序的行为。**
 
@@ -411,7 +412,7 @@ SAE 的 feature 给开发者看是金矿,给用户看就是天书。**"可解释
 - LLM 的 in-context learning 让人觉得它在"执行"prompt 里的指令——这确实有几分像把 prompt 当代码。
 - "Compression is intelligence" 的视角下，权重 $W$ 是训练数据的**有损压缩**——你也可以反向理解为"训练数据 = 解压后展开的所有规则"。
 
-### 6.2 错的部分（30%，但很关键）
+### 7.2 错的部分（30%，但很关键）
 
 #### 错位 ①：硬规则 vs 软统计
 
@@ -455,7 +456,7 @@ next_token: "n =" # 5%
 
 训练数据是**例子**，不是规则。规则在哪里？**规则是梯度下降从例子里"归纳"出来的，存在权重里**。这是从亚里士多德到 Hume 都在讨论的"归纳问题"——例子和规则不是同一种东西。
 
-### 6.3 一个更精确的类比
+### 7.3 一个更精确的类比
 
 如果一定要用编程类比，**更准确的版本**是：
 
@@ -467,7 +468,7 @@ next_token: "n =" # 5%
 
 ---
 
-## 7. 三种范式的对照表
+## 8. 三种范式的对照表
 
 | 维度 | 符号主义 AI | 贝叶斯网络 | 深度学习大模型 |
 |------|-------------|------------|----------------|
@@ -489,11 +490,11 @@ next_token: "n =" # 5%
 
 ---
 
-## 8. 在 CodeGPT 里看见三个范式的影子
+## 9. 在 CodeGPT 里看见三个范式的影子
 
 虽然 CodeGPT 是一个**纯神经**模型，但它的代码里仍然能找到三种范式的痕迹：
 
-### 8.1 符号成分
+### 9.1 符号成分
 
 `tokenizer.py` 里硬编码的特殊 token——这是**纯符号**：
 
@@ -509,7 +510,7 @@ new_tokens = [prefix_id] + prefix + [suffix_id] + suffix + [middle_id] + middle
 
 这是**人写的、确定性的、离散的格式协议**——和 Prolog 里的 `parent(X, Y) :- ...` 在性质上是一样的。模型学不出"PSM 模板"——这个模板是由人**作为不可学习的协议**强加给模型的。`stop_tokens`、`lang:python` 等也都是同类——它们是**架构里的符号骨架**。
 
-### 8.2 概率成分
+### 9.2 概率成分
 
 ```python
 # model.py:301-302
@@ -519,7 +520,7 @@ idx_next = torch.multinomial(probs, num_samples=1)
 
 这是一个**条件概率分布的采样**——和贝叶斯网络的边缘 / 条件推断在数学上是同一类操作。CodeGPT 没有显式的图结构，但它每个 token 上的 next-token 分布就是一个超大规模的隐式贝叶斯模型——只是这个 CPT 是 50304 个值、由神经网络给出，不再是查表。
 
-### 8.3 神经成分
+### 9.3 神经成分
 
 12 层 Block × (注意力 + MLP) × 12 个 head = 124M 参数：
 
@@ -533,7 +534,7 @@ def forward(self, x):
 
 这里的所有"知识"都在 `self.attn`、`self.mlp` 的权重矩阵里，由 `train.py` 的 `F.cross_entropy` 通过梯度下降一格一格填进去。**这部分完全不可枚举、不可解释、连续可微**——这是纯深度学习的部分。
 
-### 8.4 三层夹心结构
+### 9.4 三层夹心结构
 
 ```
 ┌──────────────────────────────────────┐
@@ -550,7 +551,337 @@ def forward(self, x):
 
 ---
 
-## 9. 神经-符号混合：现代系统都不是纯种
+## 10. 函数式编程视角：神经网络是 f∘g∘h∘... 的世界
+
+> 在符号 AI、贝叶斯网络、深度学习这三派之外,有一条**横切**了三派的第四股力量被本文档刻意推迟到这里才登场——**函数式编程 (functional programming, FP)**。它不是历史上 1956 年 Dartmouth 大会上独立的一派,而是一种**元思想**:Lambda calculus (Church 1936) 比图灵机晚一年但更纯,Lisp 的 `(f x)` 写法从 1958 年就在了,而 PyTorch / JAX / Keras 今天写的每一段 `forward`,本质上都是 **lambda calculus 的可微分版本**。
+>
+> 这一节用函数式编程的眼光重新拆一遍神经网络的前向、反向、组合方式。你会看到一个反直觉但极其干净的结论:**深度学习其实是符号主义的一个连续化特例**——把符号从离散原子换成可微张量,把规则从 `if-else` 换成线性映射 + 非线性,但**"组合"这件事本身,是同一种动作**。
+
+### 10.1 前向传播 = 函数组合 (Function Composition)
+
+打开 `model.py:177-198` 的 `forward`:
+
+```python
+def forward(self, idx, targets=None):
+    ...
+    x = self.transformer.drop(tok_emb + pos_emb)   # f₀
+    for block in self.transformer.h:                # f₁, f₂, ..., f₁₂
+        x = block(x)
+    x = self.transformer.ln_f(x)                    # f₁₃
+    logits = self.lm_head(x)                        # f₁₄
+```
+
+数学上这就是函数组合的链式表达:
+
+$$
+\text{logits} \;=\; f_{14} \circ f_{13} \circ f_{12} \circ \cdots \circ f_1 \circ f_0\,(x)
+$$
+
+在 Lisp 里完全等价的写法:
+
+```lisp
+(lm-head (ln-f (block-12 (block-11 ... (block-1 (drop (+ tok-emb pos-emb)))))))
+```
+
+在 Clojure 里用线程宏 `->>` 让顺序和 Python `for` 循环对齐,可读性更高:
+
+```clojure
+(->> (+ tok-emb pos-emb) drop
+     block-1 block-2 ... block-12
+     ln-f lm-head)
+```
+
+**`for block in self.transformer.h: x = block(x)` 本质就是 fold / reduce**:
+
+```python
+from functools import reduce
+x = reduce(lambda acc, block: block(acc), self.transformer.h, x_initial)
+```
+
+`nn.Sequential` 把这个 fold 写得更白:
+
+```python
+model = nn.Sequential(emb, drop, block_1, ..., block_12, ln_f, lm_head)
+out = model(x)   # 内部就是 reduce
+```
+
+每个 `Block` 里 (`model.py:102-105`) 又是同样的组合套娃:
+
+```python
+def forward(self, x):
+    x = x + self.attn(self.ln_1(x))     # x + (attn ∘ ln_1)(x)
+    x = x + self.mlp(self.ln_2(x))      # x + (mlp ∘ ln_2)(x)
+    return x
+```
+
+**残差连接 `x + f(x)`** 在 FP 视角下就是 $\text{block} = \mathrm{id} + f$——用**函数加法**让 $f$ 起步时接近恒等映射。这是何凯明 2015 *Deep Residual Learning* 的关键观察,而它的 FP 描述异常干净:**ResNet = 把恒等函数和待学习的扰动函数相加**。
+
+### 10.2 Keras Functional API:把函数组合写在脸上
+
+PyTorch 的 `for block in ...` 是命令式风格,函数组合藏在循环里。**Keras Functional API 直接把"层即函数"写成 API**:
+
+```python
+# Keras Functional API —— 这就是带形状信息的 lambda calculus
+inputs = Input(shape=(seq_len,))
+x = Embedding(vocab_size, n_embd)(inputs)
+x = Dropout(0.1)(x)
+for _ in range(n_layer):
+    x = TransformerBlock(n_head, n_embd)(x)
+x = LayerNorm()(x)
+outputs = Dense(vocab_size)(x)
+model = Model(inputs, outputs)
+```
+
+看 `Embedding(vocab_size, n_embd)(inputs)` 这一行——`Embedding(...)` 返回一个**可调用对象** (callable),再被 `(inputs)` 调用。这就是**柯里化 (currying)**:
+
+```
+Embedding : (vocab_size, n_embd) → (Tensor → Tensor)
+                                        ↑
+                                  这是个待应用输入的函数
+```
+
+`x = Dense(64)(x)` 等价于 Haskell 里的 `x' = dense 64 x`,等价于 Lisp 里的 `(setq x ((dense 64) x))`。**Keras 的设计哲学就是"层即函数"**——François Chollet 在 *Deep Learning with Python* 第二版里专门论证 "DL is composition of differentiable functions"——他把这条话刻进了 Keras 的核心 API。
+
+更极致的是 **JAX / Flax**,它把"模型即纯函数"做到底:
+
+```python
+# JAX/Flax 风格 —— 模型完全是纯函数
+def forward(params, x):
+    x = embedding(params['emb'], x)
+    for i in range(n_layer):
+        x = transformer_block(params['blocks'][i], x)
+    return lm_head(params['lm_head'], x)
+```
+
+参数**显式作为函数第一参数**传入,完全没有 `self`,没有隐藏状态——这是数学意义上严格的纯函数。这就是为什么 `jax.grad(forward)` 能直接对参数求导:函数有梯度的前提是它**真的是函数**。
+
+### 10.3 Transducer 思想:变换从数据里解耦
+
+**Transducer** 是 Rich Hickey 在 Clojure 1.7 (2015) 引入的关键概念:**把"做什么变换"和"在什么数据上变换"彻底分开**。一个 transducer 描述"如何变",可以在任何 reducible 数据源上应用。
+
+```clojure
+;; Clojure transducer
+(def xf (comp (map inc) (filter even?) (take 5)))
+;; xf 只描述变换,跟数据完全无关
+(transduce xf + 0 (range 100))        ;; 应用到无限序列
+(transduce xf conj [] my-channel)     ;; 应用到 channel
+```
+
+**`nn.ModuleList` 正是神经网络版的 transducer 集合**:
+
+```python
+# model.py:148 —— 一组与数据无关的变换
+self.h = nn.ModuleList([Block(config) for _ in range(n_layer)])
+
+# 应用时才注入数据流
+for block in self.h:
+    x = block(x)
+```
+
+`self.h` 本身**不含任何数据流转的逻辑**,只是 12 个独立的可调用变换——就像 `(comp f₁ f₂ ... f₁₂)`。这有三个直接好处:
+
+1. **可移植** —— `self.h` 可以应用到任何 batch / seq_len 上,变换本身不变。
+2. **可插拔** —— `self.h[3] = NewBlock(...)` 立刻替换中间一层,其他层不受影响——这是 Hugging Face PEFT / LoRA 等技术的底层前提。
+3. **可观测** —— 逐层 hook 出 hidden state(也就是 [§6.3 logit lens](#6-可解释性深度学习最大的软肋以及它现在进展到哪一步) 的实现基础)——因为每一层都是独立的纯变换,中间值可以被任意截取。
+
+PyTorch 2.0 引入的 `torch.compile` 把这思想推到极致——它**先把 forward 跟踪成一个静态计算图 (纯函数!),再做整图融合优化**。前提条件正是:**你的 forward 已经是函数组合,没有隐藏副作用**。
+
+### 10.4 Map / Reduce 无处不在
+
+神经网络几乎每一个原语都是 map 或 reduce:
+
+| 操作 | 函数式对应 | 在 CodeGPT 哪里 |
+|------|-----------|-----------------|
+| Batch 维并行 | `map` over B | `forward` 第一维 (`model.py:179`) |
+| Token 维并行 | `map` over T | `tok_emb = wte(idx)` 每个位置独立 (`model.py:183`) |
+| Linear / GELU | `map` over hidden dim | `MLP.forward` (`model.py:85-90`) |
+| Softmax | `map` + `reduce`(归一化) | `model.py:68, 301` |
+| Attention 加权求和 | `reduce` over keys | `att @ v` (`model.py:70`) |
+| LayerNorm | `reduce`(mean/var) + `map`(scale) | `LayerNorm.forward` (`model.py:27-28`) |
+| Cross-entropy loss | `map`(per-token NLL) + `reduce`(mean) | `model.py:192` |
+| `sum(p.numel() for p in ...)` | `reduce` | `get_num_params` (`model.py:164`) |
+
+**Attention 是教科书级的 map-reduce**:
+
+```python
+# model.py:66-70  (q, k, v: shape [B, H, T, D])
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(D))   # map: 每对 (q_i, k_j) 求点积
+att = att.masked_fill(mask, float('-inf'))
+att = F.softmax(att, dim=-1)                              # reduce + 归一化
+y = att @ v                                               # reduce: 加权求和
+```
+
+这正是 Google 2004 *MapReduce* 论文的内核:**map 阶段独立计算,reduce 阶段聚合**。当年用来在 PB 级日志上算词频,今天用来在 (B, H, T, T) 张量上算注意力——**同样的范式,只换了硬件 (CPU 集群 → GPU SIMD)**。
+
+`torch.vmap`、`jax.vmap`、TensorFlow 的 `tf.map_fn` 都是显式的 **map** 算子——它们让你写"单样本逻辑",由框架自动 lift 到 batch 维。这和 Lisp 的 `(mapcar f xs)`、Haskell 的 `fmap f xs`、Clojure 的 `(map f xs)` 是**同一个函数式原语**,只是参数从列表换成了张量。
+
+### 10.5 高阶函数:Optimizer 与 Module 都是
+
+**高阶函数** = 接受函数 / 返回函数的函数。神经网络里到处都是:
+
+```python
+# model.py:240 —— optimizer 接受 model 的参数 (本质是接受函数的内部状态)
+optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, ...)
+
+# 训练循环: 模型(函数) + 数据 → loss → 梯度 → 更新模型
+for step in range(max_iters):
+    loss = model(x, y)[1]   # 调用函数
+    loss.backward()         # 对函数求导
+    optimizer.step()        # 用梯度更新函数(的参数)
+```
+
+**Optimizer 在范畴论意义上是一个 endofunctor**:它接受 (Model, Gradient) 返回 Model'——也就是 $\text{Optimizer}: \text{Model} \to \text{Model}$,把函数空间映回它自己。
+
+`nn.Module` 也是高阶——它**接受子 module 作为构造参数,组合成更大的 module**:
+
+```python
+# model.py:93-100 —— Block 是高阶 module
+class Block(nn.Module):
+    def __init__(self, config):
+        self.ln_1 = LayerNorm(...)        # 子函数
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = LayerNorm(...)
+        self.mlp = MLP(config)
+```
+
+`CodeGPT` 整体就是一棵**函数树** (function tree):
+
+```
+CodeGPT
+├── transformer (ModuleDict)
+│   ├── wte (Embedding)
+│   ├── wpe (Embedding)
+│   ├── drop (Dropout)
+│   ├── h (ModuleList × 12)
+│   │   └── Block
+│   │       ├── ln_1 (LayerNorm)
+│   │       ├── attn (CausalSelfAttention)
+│   │       ├── ln_2 (LayerNorm)
+│   │       └── mlp (MLP)
+│   └── ln_f (LayerNorm)
+└── lm_head (Linear)
+```
+
+`named_parameters()` (`model.py:215`) 就是这棵树的中序遍历。这种结构在 Haskell / OCaml 的 functor 里有严格对应——`nn.Module` 本质上是个 **"applicative functor over differentiable maps"**。
+
+### 10.6 不可变性 (Immutability) 与纯函数:Autograd 的底层假设
+
+**Autograd 工作的根本前提是 `forward` 接近纯函数**——每个张量操作不应有隐藏副作用,否则反向传播的计算图就断了。这就是为什么 PyTorch 文档反复警告:
+
+```python
+x = self.linear(x)
+x.relu_()        # ❌ in-place,可能破坏 autograd
+x = x.relu()     # ✅ 返回新张量,纯函数
+```
+
+PyTorch 的 autograd engine 在跑 backward 时,**需要 forward 时每一步的中间张量都还存在**——in-place 操作会覆盖这些张量,直接报错 `RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation`。
+
+JAX 走得更极端——**完全禁止 in-place**,所有张量天然不可变。这让:
+
+- `jax.jit` 能做激进的整图融合优化
+- `jax.grad` 能自动微分任何 Python 函数
+- `jax.pmap` / `jax.vmap` 能轻松并行/批量化
+- `jax.checkpoint` 能用重算换显存(只有纯函数才能"重新跑一遍")
+
+——**全部依赖于纯函数性**。这一点和 Haskell / Clojure 的不可变数据结构哲学**完全一致**:**只要变换是纯的,组合就是无限自由的**。
+
+`model.py` 的 `forward` 仔细看,**没有任何一行有副作用**:`tok_emb = self.wte(idx)`、`x = self.drop(...)`、`x = block(x)` 全部是"读取参数 + 返回新张量"。这就是为什么 PyTorch 的 hook 机制 (`register_forward_hook`)、`torch.compile`、反向传播 都能干干净净地工作——CodeGPT 的 forward 已经是 FP 风格了,只是用命令式句法写出来。
+
+### 10.7 反向传播 = Chain Rule on Composed Functions
+
+最优美的对应在这里。前向是 $y = (f_n \circ \cdots \circ f_1)(x)$,反向就是 chain rule 的层层乘积:
+
+$$
+\frac{\partial L}{\partial x} \;=\; \frac{\partial L}{\partial y_n} \cdot \frac{\partial y_n}{\partial y_{n-1}} \cdot \frac{\partial y_{n-1}}{\partial y_{n-2}} \,\cdots\, \frac{\partial y_1}{\partial x}
+$$
+
+这就是函数式编程里 **"组合 (composition) 的求导是导数的组合 (composition)"** 这条最基本的等式。PyTorch 的 autograd 把它做成了机械过程:
+
+```python
+loss.backward()   # 对 (f_n ∘ ... ∘ f_1) 用 chain rule 求 grad
+```
+
+更深一层:**自动微分 (automatic differentiation)** 本身就是一种 **transformation on functions**——给定 $f$,AD 返回 $f'$。这是个**高阶函数**,在 JAX 里写得最白:
+
+```python
+import jax
+grad_fn = jax.grad(loss_fn)   # 高阶函数: 函数 -> 它的梯度函数
+grads = grad_fn(params, x, y)
+```
+
+`jax.grad` 是个 **functor**——它把函数空间里的对象 (你的 `loss_fn`) 映到另一个函数空间里的对象 (它的梯度函数)。这是范畴论的语言,但 1958 年 McCarthy 设计 Lisp 时已经隐隐有这种想法了——**程序可以是数据,函数可以被变换**。
+
+`vmap`、`pmap`、`grad`、`jit` 全是 JAX 的"函数变换器" (function transformations)。**深度学习框架的现代设计,正在快速向"高阶函数 + 函数变换"这个方向收敛**。
+
+### 10.8 符号主义 ↔ 函数式 ↔ 逻辑式:三位一体
+
+回到本文档的主线。把这几派放在历史轴上:
+
+| 年份 | 思想 | 代表 | 与神经网络的连接 |
+|------|------|------|-----------------|
+| 1936 | Lambda calculus | Church | `forward` 是 λ 表达式的可微版本 |
+| 1936 | 图灵机 | Turing | 等价于 lambda calculus (Church-Turing thesis) |
+| 1958 | Lisp | McCarthy | 第一个让"程序 = 数据";Transformer 也把 token 当数据流 |
+| 1972 | Prolog | Colmerauer | 逻辑式 = 反向函数式: 给输出找输入 |
+| 1980s | Curry-Howard 对应 | 数理逻辑 | **类型 = 命题,程序 = 证明**——张量形状是最弱的"类型" |
+| 1986 | Backprop | Rumelhart/Hinton | 函数组合的 chain rule 自动化 |
+| 2015 | Keras Functional API | Chollet | 把"层即函数"明确写进 API |
+| 2015 | Clojure Transducer | Hickey | 变换与数据解耦——`nn.ModuleList` 的精神先祖 |
+| 2018 | JAX | Google | 纯函数式神经网络 + 函数变换 |
+| 2022 | torch.compile | Meta | 命令式 PyTorch 被自动 trace 成函数式 IR 做优化 |
+
+**逻辑式编程 (Prolog) 是函数式编程的"反向"**:函数式说"给我 x,我返回 f(x)";逻辑式说"给我 y,我找所有满足 f(x)=y 的 x"。神经网络的**训练过程正是逻辑式风格**——给定目标 $y$,反向找出能产出它的参数 $\theta$:
+
+$$
+\theta^* \;=\; \arg\min_\theta \;\sum_i \;\|f_\theta(x_i) - y_i\|^2
+$$
+
+这是 **inverse function composition**。SGD 是这个 inverse 的**近似数值求解器**,而 Prolog 的 unification + backtracking 是 inverse 的**精确符号求解器**(代价是搜索空间爆炸)。**两者是同一个"反向解析"问题的两种实现**——一个用连续优化,一个用离散搜索。
+
+更深一层是 **Curry-Howard 对应**:**类型即命题,程序即证明**。在依赖类型语言 (Coq, Agda, Lean) 里,你写一个类型为 `forall n, n + 0 = n` 的程序,这个程序的存在本身就是该命题的证明。神经网络里有什么对应物?——**张量形状就是最弱的类型**,而 `assert config.n_embd % config.n_head == 0` (`model.py:35`) 之类是最低级的"形状证明"。MIT 的 Brent Yorgey、CMU 的 David Spivak、Conal Elliott 等人在尝试把更强的依赖类型引入深度学习框架(参见 *Categorical Deep Learning* 项目),这是一个非常前沿的方向。
+
+### 10.9 在 CodeGPT 里找全函数式的影子
+
+| FP 概念 | CodeGPT 实例 | 文件:行 |
+|---------|--------------|---------|
+| 函数组合 | `forward` 里 12 层 Block 串联 | `model.py:186-187` |
+| Fold / Reduce | `for block in self.transformer.h: x = block(x)` | `model.py:186-187` |
+| 高阶函数 | `self.apply(self._init_weights)` 把函数作为参数传 | `model.py:155` |
+| 柯里化 | `nn.Linear(768, 768)` 返回可调用对象 | `model.py:36-37` |
+| Map (并行变换) | Batch 维 B、序列维 T 都是隐式 map | `model.py:179, 52` |
+| Reduce (聚合) | `F.cross_entropy` 的 mean reduction | `model.py:192` |
+| 不可变性 | autograd 依赖不修改张量,forward 全是纯变换 | 整个 forward |
+| 纯函数 | `LayerNorm.forward` 只读 weight/bias,不改 state | `model.py:27-28` |
+| Functor 容器 | `nn.ModuleList` / `nn.ModuleDict` 把变换"装入" | `model.py:144-150` |
+| Transducer 思想 | `self.transformer.h` 是与数据无关的变换序列 | `model.py:148` |
+| 函数变换 | `torch.compile(model)` 把 model 重写成更快的 model | `train.py` |
+| 反向 = chain rule | `loss.backward()` 沿组合链反向求导 | 训练循环 |
+| 残差 = id + f | `x = x + self.attn(self.ln_1(x))` | `model.py:103-104` |
+
+`forward` (`model.py:177-198`) 里**没有任何一行有副作用**——所有操作都返回新张量。这就是为什么:
+
+1. PyTorch 的 hook 系统能不破坏原代码地插入观测点 (`register_forward_hook`)——**纯函数允许这种"装饰"**(decorator pattern in FP)。
+2. `torch.compile` 能整图重写——**纯函数才有可分析的语义**。
+3. 反向传播能自动展开——**chain rule 要求每一步可微分,而可微分性 ≈ 纯函数性**。
+
+### 10.10 一句话总结
+
+> 神经网络看起来是"统计机器",其实是**统计化的 lambda calculus**。`forward` 是函数组合,`backward` 是函数组合的 chain rule,`optimizer.step()` 是函数空间上的高阶变换。
+>
+> **符号 AI 用离散原子 + `if-else` 组合,神经网络用张量 + 线性映射 + 非线性组合——但"组合"这件事本身是同一种动作**。Keras Functional / JAX 把这层连接做到 API 表面;PyTorch 用命令式句法藏起来但本质未变;`torch.compile` 把命令式偷偷再 trace 回函数式做优化。
+>
+> 三个范式在编程范式这一层握手:
+>
+> - **符号** = 用代数变换 / unification 组合
+> - **函数式** = 用 λ 抽象 + composition 组合
+> - **神经** = 用可微变换 + chain rule 组合
+> - **逻辑** = 求解组合的逆映射
+>
+> **"组合 (composition)" 是 AI 系统永恒的骨架**。任何一种 AI 范式,最终都在回答同一个问题:**怎么把简单原语拼成复杂行为?** 这就是为什么 Lisp 1958 的 `(f (g (h x)))` 和 PyTorch 2026 的 `for block in self.transformer.h: x = block(x)` 看起来不同,实质完全一致——它们都是**函数组合**这条人类思维基本动作的不同方言。
+
+---
+
+## 11. 神经-符号混合：现代系统都不是纯种
 
 回顾一下产业现状：
 
@@ -575,7 +906,7 @@ def forward(self, x):
 
 ---
 
-## 10. 给用户原问题的最终回答
+## 12. 给用户原问题的最终回答
 
 回到一开始的问题——**"GPT 是不是把训练数据当成一堆可执行的符号代码来执行？"**
 
