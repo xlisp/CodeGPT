@@ -97,7 +97,7 @@ RLHF 偏好对:     10^4 ~ 10^6  pair     （人类排序的偏好）
 |---|---|---|---|
 | 预训练 | 互联网文本 | `F.cross_entropy(logits, next_token)` | 语法、世界知识、基础推理 |
 | SFT | 人类写的"问-答"对 | 同一个 `F.cross_entropy`，但 prompt 段 target 设为 `-1` | 对话格式、指令遵循 |
-| RLHF | 人类对"两个回答"的偏好排序 | `-log σ(r_good - r_bad)` 或 DPO loss | "好/不好"的品味、拒答、安全边界 |
+| RLHF | 人类对"两个回答"的偏好排序 | $-\log \sigma(r_\text{good} - r_\text{bad})$ 或 DPO loss | "好/不好"的品味、拒答、安全边界 |
 
 **关键观察**：SFT 在数学上就是预训练的子集（见 `SFT_FORGETTING_AND_MOE.md` 第 2 节），用的就是本项目 `train.py` 里这一行：
 
@@ -161,9 +161,9 @@ SFT 通常训练 1~3 个 epoch，学习率比预训练小一个数量级。改�
 
 RL 阶段有一项**KL 散度约束**（见 RLHF 文档 5.3 节）：
 
-```
-L_RL = -reward + β · KL(π_RL ‖ π_SFT)
-```
+$$
+L_{RL} = -\,\text{reward} + \beta \cdot \mathrm{KL}(\pi_{RL} \,\|\, \pi_{SFT})
+$$
 
 这一项的作用是**不允许 `W` 偏离 SFT 之后的版本太远**。所以 RL 阶段改的参数量比 SFT 还小——它只负责"微调回答风格"和"学会拒绝某些请求"，不负责重新教模型写代码。
 
@@ -478,7 +478,7 @@ RLHF 让模型学会**少数经常见到的**有害请求要拒绝。但工业�
 
 ## 9. RL 的策略梯度参数怎么体现在推理中
 
-前面第 3 节说"RL 的成果都在 `W` 里"，但这个说法太笼统了。策略梯度（policy gradient）里有一大堆东西——奖励模型、优势函数 `A`、价值头 `V`、重要性采样比 `ratio`、clip 系数 `ε`、KL 系数 `β`——**它们到底哪一个进了 `W`？推理时又是怎么"生效"的？**
+前面第 3 节说"RL 的成果都在 `W` 里"，但这个说法太笼统了。策略梯度（policy gradient）里有一大堆东西——奖励模型、优势函数 $A$、价值头 $V$、重要性采样比 $\text{ratio}$、clip 系数 $\varepsilon$、KL 系数 $\beta$——**它们到底哪一个进了 `W`？推理时又是怎么"生效"的？**
 
 答案短得让人意外：**除了 actor 网络本身的参数，其余全部在训练结束的那一刻被扔掉。策略梯度在推理中唯一的痕迹，就是 `model.py:278` 那一行输出的 logits 向量被重新排过序。**
 
@@ -488,21 +488,21 @@ RLHF 让模型学会**少数经常见到的**有害请求要拒绝。但工业�
 
 先看策略梯度的形式。REINFORCE 的目标是最大化期望回报，梯度是：
 
-```
-∇J(θ) = E[ ∇log π_θ(a | s) · A ]
-```
+$$
+\nabla_\theta J(\theta) = \mathbb{E}\big[\, \nabla_\theta \log \pi_\theta(a \mid s) \cdot A \,\big]
+$$
 
 在语言模型里，这些符号有非常朴素的对应：
 
 | 符号 | RL 术语 | 在 LM 里是什么 | 对应代码 |
 |---|---|---|---|
-| `s` | 状态 state | 已生成的前缀 `idx[:, :t]` | `model.py:278` 的 `idx_cond` |
-| `a` | 动作 action | 下一个 token | `model.py:302` 的 `idx_next` |
-| `π_θ(a\|s)` | 策略 policy | `softmax(logits)` | `model.py:301` |
-| `A` | 优势 advantage | 奖励模型打分 − baseline | 训练期才存在 |
-| `θ` | 策略参数 | 就是 `W` 本身 | `model.py` 里全部 `nn.Linear` |
+| $s$ | 状态 state | 已生成的前缀 `idx[:, :t]` | `model.py:278` 的 `idx_cond` |
+| $a$ | 动作 action | 下一个 token | `model.py:302` 的 `idx_next` |
+| $\pi_\theta(a \mid s)$ | 策略 policy | `softmax(logits)` | `model.py:301` |
+| $A$ | 优势 advantage | 奖励模型打分 $-$ baseline | 训练期才存在 |
+| $\theta$ | 策略参数 | 就是 `W` 本身 | `model.py` 里全部 `nn.Linear` |
 
-**关键：`π_θ` 不是一个额外的网络，它就是 CodeGPT 自己**。`generate()` 里的 `F.softmax(logits, dim=-1)` 就是策略函数本体。所以"策略梯度更新策略参数"这句话翻译过来就是——**它更新的就是 `model.py` 里那些矩阵，和预训练更新的是同一批参数**。
+**关键：$\pi_\theta$ 不是一个额外的网络，它就是 CodeGPT 自己**。`generate()` 里的 `F.softmax(logits, dim=-1)` 就是策略函数本体。所以"策略梯度更新策略参数"这句话翻译过来就是——**它更新的就是 `model.py` 里那些矩阵，和预训练更新的是同一批参数**。
 
 把上面的梯度反推成一个 loss，会得到和 `train.py` 里几乎一样的东西：
 
@@ -518,7 +518,7 @@ loss = -(logp * advantage).mean()
 
 **这两行 loss 的差别只有一个 `advantage` 乘子。** 所以：
 
-> **SFT 是 `advantage ≡ +1` 的策略梯度特例；策略梯度是 advantage 可正可负的一般情形。**
+> **SFT 是 advantage $\equiv +1$ 的策略梯度特例；策略梯度是 advantage 可正可负的一般情形。**
 
 ### 9.2 负梯度：RL 能做而 SFT 做不到的唯一一件事
 
@@ -572,13 +572,13 @@ PPO / GRPO 那些复杂的组件，推理时一个都不剩：
 
 | 组件 | 训练期作用 | 推理期还在吗 |
 |---|---|---|
-| actor `π_θ` | 被优化的策略 | **在** —— 它就是 `ckpt.pt` 里的 `W` |
-| reference model `π_sft` | 算 KL 惩罚的锚点 | 丢弃（冻结副本，训完删掉） |
-| reward model `r_φ` | 给整条回答打分 | 丢弃（是另一个网络，不参与 forward） |
-| value head `V_ψ` | 算 baseline / GAE | 丢弃（PPO 专用的额外线性头） |
-| advantage `A` | 每个 token 的权重 | 丢弃（是训练期的一个张量，不是参数） |
-| ratio / clip `ε` | 限制单步更新幅度 | 丢弃（纯优化技巧） |
-| KL 系数 `β` | 不让 `W` 跑太远 | 丢弃（它的效果已经烧进 `W` 了） |
+| actor $\pi_\theta$ | 被优化的策略 | **在** —— 它就是 `ckpt.pt` 里的 `W` |
+| reference model $\pi_{sft}$ | 算 KL 惩罚的锚点 | 丢弃（冻结副本，训完删掉） |
+| reward model $r_\phi$ | 给整条回答打分 | 丢弃（是另一个网络，不参与 forward） |
+| value head $V_\psi$ | 算 baseline / GAE | 丢弃（PPO 专用的额外线性头） |
+| advantage $A$ | 每个 token 的权重 | 丢弃（是训练期的一个张量，不是参数） |
+| ratio / clip $\varepsilon$ | 限制单步更新幅度 | 丢弃（纯优化技巧） |
+| KL 系数 $\beta$ | 不让 `W` 跑太远 | 丢弃（它的效果已经烧进 `W` 了） |
 
 > **一句话：RLHF 是一套四个网络的训练系统，交付物却只有一个网络。推理时 `sample.py` 加载的 `ckpt.pt` 里只有 actor。**
 
@@ -625,14 +625,13 @@ RL 对 `W` 的改动，最终就体现在推理时那个 `(1, 1, 50304)` 的 log
 
 一句话：**`W` 里的每个大矩阵，本质都是把高维语义向量投影到一个更低维的"子空间"里去比相似度——训练就是在拟合这些子空间的朝向。**
 
-以注意力为例。`c_attn`（`model.py:36`）把 `n_embd` 维向量一次算出 Q/K/V，然后**切成 `n_head` 份**，每份只有 `head_dim = n_embd / n_head`（124M 版是 `768/12 = 64`）维。于是每个 head 的注意力打分是：
+以注意力为例。`c_attn`（`model.py:36`）把 `n_embd` 维向量一次算出 Q/K/V，然后**切成 `n_head` 份**，每份只有 `head_dim = n_embd / n_head`（124M 版是 $768/12 = 64$）维。于是每个 head 的注意力打分是：
 
-```
-score(i, j) = x_i^T · (Wq_h^T Wk_h) · x_j
-                       └──── 秩 ≤ 64 的矩阵 ────┘
-```
+$$
+\text{score}(i, j) = x_i^\top \underbrace{(W_{q,h}^\top W_{k,h})}_{\text{秩} \le 64 \text{ 的矩阵}} x_j
+$$
 
-中间那个 `Wq_h^T Wk_h` 是一个 `n_embd × n_embd` 但**秩最多 64** 的矩阵——它定义了一个 64 维子空间，这个 head **只在这 64 维里比较两个 token 像不像**。12 个 head 就是 12 个不同朝向的 64 维子空间，各自负责一种"语义关系"（有的看句法邻接、有的看变量名呼应、有的看括号配对）。脚本第 2 段把这件事打印出来：
+中间那个 $W_{q,h}^\top W_{k,h}$ 是一个 $n_\text{embd} \times n_\text{embd}$ 但**秩最多 64** 的矩阵——它定义了一个 64 维子空间，这个 head **只在这 64 维里比较两个 token 像不像**。12 个 head 就是 12 个不同朝向的 64 维子空间，各自负责一种"语义关系"（有的看句法邻接、有的看变量名呼应、有的看括号配对）。脚本第 2 段把这件事打印出来：
 
 ```
   head |  rank(Wq_h Wk_h^T)  |  该 head 关心的子空间维数
