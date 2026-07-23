@@ -72,6 +72,8 @@ ChatGPT 成功的另外两块关键拼图：
 - **三步训练的分工**：预训练写入语言/知识（改所有参数，幅度大）→ SFT 写入对话格式（同样的 `F.cross_entropy`，prompt 段 target 设 -1）→ RL 写入偏好/品味（KL 散度约束幅度）。为什么必须这个顺序，为什么跳过 SFT 直接 RL 会崩到"奖励黑客"
 - **纯靠 W 的一半 vs 需要代码的一半**：每次 token 预测确实只是 `W · x`，但 chat template / stop_tokens / 采样参数构成的"协议"必须和训练时完全一致——否则 `W` 里的 SFT/RL 能力"沉睡"不醒。本地跑开源模型停不下来，十有八九就是 stop_tokens 没配对
 - **W 根本装不下的能力**：tool calling（`execute_tool` 是纯外部代码）、RAG（知识不进 W）、长期记忆（超 `block_size` 必须外存）、安全过滤（双保险）——ChatGPT 是"模型 + 大量代码"的产品
+- **RL 的策略梯度怎么在推理里生效**：策略梯度不留下任何"额外参数"，它就是同一套 `W` 上的一次位移——SFT 是 `advantage≡+1` 的特例，RL 是 advantage 可正可负的一般情形（负号才能"压低坏 token"，这是 SFT 做不到的）。附一段 20 行可跑 PyTorch 对照实验
+- **语义拟合的参数子空间可视化**：配套脚本 `visualize_semantics.py` 把一条 prompt 从"裸点积 → head 子空间 → 注意力检索 → 逐层 logit lens → 最终分布"五个阶段打印成 ASCII 热力图，亲眼看到熵如何逐层下降、答案如何被"拟合"出来
 - **回到 CodeGPT**：一张对齐表列出 `sample.py:101 encode_prompt`、`sample.py:98 stop_tokens`、`model.py:279 temperature` 等——本项目的推理脚手架虽然简单但已经完整，是理解"训练-推理对齐"的最小样本
 
 ### [RAG 还是 SFT：面对一堆私有数据，该怎么选？](docs/RAG_VS_SFT.md)
@@ -166,6 +168,7 @@ CodeGPT/
 ├── train.py            # 训练脚本（单卡/多卡 DDP）
 ├── sample.py           # 代码生成/采样脚本
 ├── tokenizer.py        # 代码分词器 + FIM 变换
+├── visualize_semantics.py  # 语义子空间可视化：点积→子空间→注意力→logit lens→最终分布
 ├── configurator.py     # 配置文件解析器
 ├── bench.py            # 性能基准测试
 ├── config/
